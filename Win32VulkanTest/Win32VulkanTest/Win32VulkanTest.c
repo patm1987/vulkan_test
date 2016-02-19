@@ -3,12 +3,15 @@
 
 #include "Win32VulkanTest.h"
 
+#include "VulkanRenderer.h"
+
 static const int kDefaultWidth = 640;
 static const int kDefaultHeight = 480;
 
 typedef struct {
 	HWND hWindow;
 	BOOL running;
+	VulkanRenderer* pVulkanRenderer;
 } ApplicationData;
 
 LRESULT CALLBACK WindowProc(
@@ -50,7 +53,7 @@ INT WinMain(
 	wndClass.hInstance = hInstance;
 	wndClass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	wndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
-	wndClass.hbrBackground = COLOR_WINDOW;
+	wndClass.hbrBackground = (HBRUSH)COLOR_WINDOW;
 	wndClass.lpszMenuName = NULL;
 	wndClass.lpszClassName = className;
 	wndClass.hIconSm = NULL;
@@ -82,6 +85,7 @@ INT WinMain(
 	ApplicationData appData = { 0 };
 	appData.hWindow = hWindow;
 	appData.running = TRUE;
+	appData.pVulkanRenderer = VulkanRenderer_Create();
 
 	SetWindowLongPtr(hWindow, GWLP_USERDATA, (LONG_PTR)&appData);
 
@@ -97,9 +101,13 @@ INT WinMain(
 		}
 
 		// Game Stuff
+		VulkanRenderer_Render(appData.pVulkanRenderer);
 	}
 
+	VulkanRenderer_Destroy(appData.pVulkanRenderer);
+	appData.pVulkanRenderer = NULL;
 	DestroyWindow(appData.hWindow);
+	appData.hWindow = NULL;
 
 	return 0;
 }

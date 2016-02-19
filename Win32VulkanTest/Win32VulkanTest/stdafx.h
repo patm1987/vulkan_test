@@ -14,6 +14,7 @@
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
-#include <stdint.h>
 
 // TODO: reference additional headers your program requires here
+#include <assert.h>
+#include <stdint.h>
