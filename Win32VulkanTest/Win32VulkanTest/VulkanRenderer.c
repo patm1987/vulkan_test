@@ -46,6 +46,7 @@ VulkanRenderer* VulkanRenderer_Create() {
 
 	VkResult result;
 
+	// initialize vulkan
 	VkInstanceCreateInfo createInfo = { 0 };
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	createInfo.pNext = NULL;
@@ -60,6 +61,10 @@ VulkanRenderer* VulkanRenderer_Create() {
 		PrintResult(result);
 		exit(1);
 	}
+
+	// get all the physical devices
+	// find one we like
+	// make a logical device
 
 	return pVulkanRenderer;
 }
