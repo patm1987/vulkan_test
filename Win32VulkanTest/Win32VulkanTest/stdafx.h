@@ -18,3 +18,6 @@
 // TODO: reference additional headers your program requires here
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <vulkan/vulkan.h>
+#pragma comment(lib, "vulkan-1.lib")
