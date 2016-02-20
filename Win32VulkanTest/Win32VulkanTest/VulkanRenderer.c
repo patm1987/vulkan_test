@@ -15,9 +15,13 @@ struct vulkan_renderer_t {
 	// TODO: do I need this?
 	VkQueue mainQueue;
 	VkCommandPool commandPool;
+
+	VkCommandBuffer setupCommandBuffer;
 };
 
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
+void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
+void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 
 void PrintResult(VkResult result);
 BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
@@ -33,6 +37,7 @@ VkPhysicalDeviceType aDevicePrecidents[] = {
 
 VulkanRenderer* VulkanRenderer_Create() {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
+	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
 
 	VkResult result;
 
@@ -169,6 +174,7 @@ VulkanRenderer* VulkanRenderer_Create() {
 	free(paPhysicalDevices);
 
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
+	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
 
 	return pVulkanRenderer;
 }
@@ -180,6 +186,8 @@ void VulkanRenderer_Render(VulkanRenderer* pThis) {
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	assert(pThis);
 
+
+	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
 	vkDestroyDevice(pThis->device, NULL);
@@ -206,6 +214,33 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 	if (result != VK_SUCCESS) {
 		PrintResult(result);
 		exit(1);
+	}
+}
+
+void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
+	VkResult result;
+
+	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
+	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	commandBufferAllocateInfo.pNext = NULL;
+	commandBufferAllocateInfo.commandPool = pThis->commandPool;
+	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	commandBufferAllocateInfo.commandBufferCount = 1;
+
+	result = vkAllocateCommandBuffers(
+		pThis->device,
+		&commandBufferAllocateInfo,
+		&pThis->setupCommandBuffer);
+}
+
+void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
+	if (pThis->setupCommandBuffer) {
+		vkFreeCommandBuffers(
+			pThis->device,
+			pThis->commandPool,
+			1,
+			&pThis->setupCommandBuffer);
+		pThis->setupCommandBuffer = NULL;
 	}
 }
 
