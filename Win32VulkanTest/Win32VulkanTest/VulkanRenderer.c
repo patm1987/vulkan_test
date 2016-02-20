@@ -26,6 +26,14 @@ void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 void PrintResult(VkResult result);
 BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
 
+#define VK_EXECUTE_REQUIRE_SUCCESS(cmd) { \
+	VkResult __result__ = (cmd);\
+	if (__result__ != VK_SUCCESS) {\
+		PrintResult(__result__);\
+		exit(1);\
+	}\
+}
+
 // order the devices by the kind we'd prefer to run on
 VkPhysicalDeviceType aDevicePrecidents[] = {
 	VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
@@ -39,8 +47,6 @@ VulkanRenderer* VulkanRenderer_Create() {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
 
-	VkResult result;
-
 	// initialize vulkan
 	VkInstanceCreateInfo createInfo = { 0 };
 	createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -51,35 +57,29 @@ VulkanRenderer* VulkanRenderer_Create() {
 	createInfo.ppEnabledLayerNames = NULL;
 	createInfo.enabledExtensionCount = 0;
 	createInfo.ppEnabledExtensionNames = NULL;
-	result = vkCreateInstance(&createInfo, NULL, &pVulkanRenderer->instance);
-	if (result != VK_SUCCESS) {
-		PrintResult(result);
-		exit(1);
-	}
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkCreateInstance(&createInfo, NULL, &pVulkanRenderer->instance)
+	);
 
 	// get all the physical devices
 	// first find the numer of devices
 	uint32_t physicalDeviceCount;
-	result = vkEnumeratePhysicalDevices(
-		pVulkanRenderer->instance,
-		&physicalDeviceCount,
-		NULL);
-	if (result != VK_SUCCESS) {
-		PrintResult(result);
-		exit(1);
-	}
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkEnumeratePhysicalDevices(
+			pVulkanRenderer->instance,
+			&physicalDeviceCount,
+			NULL)
+	);
 
 	// then get the devices
 	VkPhysicalDevice* paPhysicalDevices = (VkPhysicalDevice*)malloc(
 		sizeof(VkPhysicalDevice) * physicalDeviceCount);
-	result = vkEnumeratePhysicalDevices(
-		pVulkanRenderer->instance,
-		&physicalDeviceCount,
-		paPhysicalDevices);
-	if (result != VK_SUCCESS) {
-		PrintResult(result);
-		exit(1);
-	}
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkEnumeratePhysicalDevices(
+			pVulkanRenderer->instance,
+			&physicalDeviceCount,
+			paPhysicalDevices)
+	);
 
 	// find one we like
 	VkPhysicalDevice chosenDevice = NULL;
@@ -153,15 +153,13 @@ VulkanRenderer* VulkanRenderer_Create() {
 	deviceCreateInfo.enabledExtensionCount = 0; // no extensions
 	deviceCreateInfo.ppEnabledExtensionNames = NULL;
 	deviceCreateInfo.pEnabledFeatures = NULL; // no special features for now
-	result = vkCreateDevice(
-		chosenDevice,
-		&deviceCreateInfo,
-		NULL,
-		&pVulkanRenderer->device);
-	if (result != VK_SUCCESS) {
-		PrintResult(result);
-		exit(1);
-	}
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkCreateDevice(
+			chosenDevice,
+			&deviceCreateInfo,
+			NULL,
+			&pVulkanRenderer->device)
+	);
 
 	// grab the queue!
 	vkGetDeviceQueue(
@@ -186,7 +184,6 @@ void VulkanRenderer_Render(VulkanRenderer* pThis) {
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	assert(pThis);
 
-
 	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
@@ -204,22 +201,16 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 	createInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	createInfo.queueFamilyIndex = pThis->queueFamilyIndex;
 
-	VkResult result;
-	result = vkCreateCommandPool(
-		pThis->device,
-		&createInfo,
-		NULL,
-		&pThis->commandPool);
-
-	if (result != VK_SUCCESS) {
-		PrintResult(result);
-		exit(1);
-	}
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkCreateCommandPool(
+			pThis->device,
+			&createInfo,
+			NULL,
+			&pThis->commandPool)
+	);
 }
 
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
-	VkResult result;
-
 	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
 	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	commandBufferAllocateInfo.pNext = NULL;
@@ -227,10 +218,20 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	commandBufferAllocateInfo.commandBufferCount = 1;
 
-	result = vkAllocateCommandBuffers(
-		pThis->device,
-		&commandBufferAllocateInfo,
-		&pThis->setupCommandBuffer);
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkAllocateCommandBuffers(
+			pThis->device,
+			&commandBufferAllocateInfo,
+			&pThis->setupCommandBuffer)
+	);
+
+	// put in setup commands
+	VkCommandBufferBeginInfo beginInfo = { 0 };
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	beginInfo.pNext = NULL;
+	beginInfo.flags = 0;
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
 }
 
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
