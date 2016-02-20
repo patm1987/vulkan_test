@@ -38,9 +38,9 @@ ShaderManager* ShaderManager_Create(
 	ShaderManager* pShaderManager = (ShaderManager*)malloc(sizeof(ShaderManager));
 	memset(pShaderManager, 0, sizeof(ShaderManager));
 
-	pShaderManager->szShaderDirectory = strdup(szShaderDirectory);
-	pShaderManager->szVertexExtension = strdup(szVertexExtension);
-	pShaderManager->szFragmentExtension = strdup(szFragmentExtension);
+	pShaderManager->szShaderDirectory = _strdup(szShaderDirectory);
+	pShaderManager->szVertexExtension = _strdup(szVertexExtension);
+	pShaderManager->szFragmentExtension = _strdup(szFragmentExtension);
 
 	return pShaderManager;
 }
@@ -70,12 +70,12 @@ ShaderCode ShaderManager_GetVertexShader(
 	fseek(pShaderFile, 0, SEEK_SET);
 	char* szFileContents = SAFE_ALLOCATE_ARRAY(char, fileLength);
 
-	fgets(szFileContents, fileLength, pShaderFile);
+	fgets(szFileContents, (int)fileLength, pShaderFile);
 
 	ShaderManager_CloseShader(pThis, pShaderFile);
 
 	return (ShaderCode) {
-		szFileContents,
+		(uint32_t*)szFileContents,
 		fileLength
 	};
 }
