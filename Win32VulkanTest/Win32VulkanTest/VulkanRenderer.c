@@ -9,39 +9,18 @@
 struct vulkan_renderer_t {
 	VkInstance instance;
 	VkDevice device;
+
+	uint32_t queueFamilyIndex;
+
+	// TODO: do I need this?
 	VkQueue mainQueue;
+	VkCommandPool commandPool;
 };
 
-void PrintResult(VkResult result) {
-	printf("Vulkan Result: ");
-	switch (result) {
-		PRINT_VK_RESULT(VK_SUCCESS);
-		PRINT_VK_RESULT(VK_NOT_READY);
-		PRINT_VK_RESULT(VK_TIMEOUT);
-		PRINT_VK_RESULT(VK_EVENT_SET);
-		PRINT_VK_RESULT(VK_EVENT_RESET);
-		PRINT_VK_RESULT(VK_INCOMPLETE);
-		PRINT_VK_RESULT(VK_SUBOPTIMAL_KHR);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_HOST_MEMORY);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DEVICE_MEMORY);
-		PRINT_VK_RESULT(VK_ERROR_INITIALIZATION_FAILED);
-		PRINT_VK_RESULT(VK_ERROR_MEMORY_MAP_FAILED);
-		PRINT_VK_RESULT(VK_ERROR_DEVICE_LOST);
-		PRINT_VK_RESULT(VK_ERROR_EXTENSION_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_FEATURE_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_LAYER_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DRIVER);
-		PRINT_VK_RESULT(VK_ERROR_TOO_MANY_OBJECTS);
-		PRINT_VK_RESULT(VK_ERROR_FORMAT_NOT_SUPPORTED);
-		PRINT_VK_RESULT(VK_ERROR_SURFACE_LOST_KHR);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DATE_KHR);
-		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DISPLAY_KHR);
-		PRINT_VK_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
-		PRINT_VK_RESULT(VK_ERROR_VALIDATION_FAILED_EXT);
-	default:
-		printf("Unknown Result %d\n", result);
-	}
-}
+void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
+
+void PrintResult(VkResult result);
+BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
 
 // order the devices by the kind we'd prefer to run on
 VkPhysicalDeviceType aDevicePrecidents[] = {
@@ -51,25 +30,6 @@ VkPhysicalDeviceType aDevicePrecidents[] = {
 	VK_PHYSICAL_DEVICE_TYPE_CPU,
 	VK_PHYSICAL_DEVICE_TYPE_OTHER,
 };
-
-/*!
- * \brief	Determine if the \a newType of device is better than the \a oldType
- * \param	newType the new type of device
- * \param	oldType the old type of device
- * \return	TRUE if we think that \a newType is better than or equal to \a oldType
- */
-BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType) {
-	for (int i = 0; i < sizeof(aDevicePrecidents) / sizeof(VkPhysicalDevice); i++) {
-		VkPhysicalDeviceType currentPrecident = aDevicePrecidents[i];
-		if (currentPrecident == newType) {
-			return TRUE;
-		}
-		if (currentPrecident == oldType) {
-			return FALSE;
-		}
-	}
-	return TRUE;
-}
 
 VulkanRenderer* VulkanRenderer_Create() {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
@@ -93,7 +53,6 @@ VulkanRenderer* VulkanRenderer_Create() {
 	}
 
 	// get all the physical devices
-
 	// first find the numer of devices
 	uint32_t physicalDeviceCount;
 	result = vkEnumeratePhysicalDevices(
@@ -205,8 +164,11 @@ VulkanRenderer* VulkanRenderer_Create() {
 		chosenQueueIndex,
 		0,
 		&pVulkanRenderer->mainQueue);
+	pVulkanRenderer->queueFamilyIndex = chosenQueueIndex;
 
 	free(paPhysicalDevices);
+
+	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
 
 	return pVulkanRenderer;
 }
@@ -218,8 +180,81 @@ void VulkanRenderer_Render(VulkanRenderer* pThis) {
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	assert(pThis);
 
+	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
 	vkDestroyDevice(pThis->device, NULL);
 	vkDestroyInstance(pThis->instance, NULL);
 	free(pThis);
+}
+
+// Private Interface!
+
+void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
+	VkCommandPoolCreateInfo createInfo = { 0 };
+	createInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	createInfo.pNext = NULL;
+	createInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+	createInfo.queueFamilyIndex = pThis->queueFamilyIndex;
+
+	VkResult result;
+	result = vkCreateCommandPool(
+		pThis->device,
+		&createInfo,
+		NULL,
+		&pThis->commandPool);
+
+	if (result != VK_SUCCESS) {
+		PrintResult(result);
+		exit(1);
+	}
+}
+
+void PrintResult(VkResult result) {
+	printf("Vulkan Result: ");
+	switch (result) {
+		PRINT_VK_RESULT(VK_SUCCESS);
+		PRINT_VK_RESULT(VK_NOT_READY);
+		PRINT_VK_RESULT(VK_TIMEOUT);
+		PRINT_VK_RESULT(VK_EVENT_SET);
+		PRINT_VK_RESULT(VK_EVENT_RESET);
+		PRINT_VK_RESULT(VK_INCOMPLETE);
+		PRINT_VK_RESULT(VK_SUBOPTIMAL_KHR);
+		PRINT_VK_RESULT(VK_ERROR_OUT_OF_HOST_MEMORY);
+		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DEVICE_MEMORY);
+		PRINT_VK_RESULT(VK_ERROR_INITIALIZATION_FAILED);
+		PRINT_VK_RESULT(VK_ERROR_MEMORY_MAP_FAILED);
+		PRINT_VK_RESULT(VK_ERROR_DEVICE_LOST);
+		PRINT_VK_RESULT(VK_ERROR_EXTENSION_NOT_PRESENT);
+		PRINT_VK_RESULT(VK_ERROR_FEATURE_NOT_PRESENT);
+		PRINT_VK_RESULT(VK_ERROR_LAYER_NOT_PRESENT);
+		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DRIVER);
+		PRINT_VK_RESULT(VK_ERROR_TOO_MANY_OBJECTS);
+		PRINT_VK_RESULT(VK_ERROR_FORMAT_NOT_SUPPORTED);
+		PRINT_VK_RESULT(VK_ERROR_SURFACE_LOST_KHR);
+		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DATE_KHR);
+		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DISPLAY_KHR);
+		PRINT_VK_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
+		PRINT_VK_RESULT(VK_ERROR_VALIDATION_FAILED_EXT);
+	default:
+		printf("Unknown Result %d\n", result);
+	}
+}
+
+/*!
+* \brief	Determine if the \a newType of device is better than the \a oldType
+* \param	newType the new type of device
+* \param	oldType the old type of device
+* \return	TRUE if we think that \a newType is better than or equal to \a oldType
+*/
+BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType) {
+	for (int i = 0; i < sizeof(aDevicePrecidents) / sizeof(VkPhysicalDevice); i++) {
+		VkPhysicalDeviceType currentPrecident = aDevicePrecidents[i];
+		if (currentPrecident == newType) {
+			return TRUE;
+		}
+		if (currentPrecident == oldType) {
+			return FALSE;
+		}
+	}
+	return TRUE;
 }
