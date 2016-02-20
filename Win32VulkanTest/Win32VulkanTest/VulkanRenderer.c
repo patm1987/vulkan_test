@@ -9,7 +9,7 @@
 struct vulkan_renderer_t {
 	VkInstance instance;
 	VkDevice device;
-	uint32_t queueIndex;
+	VkQueue mainQueue;
 };
 
 void PrintResult(VkResult result) {
@@ -178,9 +178,6 @@ VulkanRenderer* VulkanRenderer_Create() {
 	deviceQueues[0].queueCount = 1;
 	deviceQueues[0].pQueuePriorities = queuePriorities;
 
-	// stash this away now that we're using it
-	pVulkanRenderer->queueIndex = chosenQueueIndex;
-
 	VkDeviceCreateInfo deviceCreateInfo = { 0 };
 	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	deviceCreateInfo.pNext = NULL;
@@ -201,6 +198,13 @@ VulkanRenderer* VulkanRenderer_Create() {
 		PrintResult(result);
 		exit(1);
 	}
+
+	// grab the queue!
+	vkGetDeviceQueue(
+		pVulkanRenderer->device,
+		chosenQueueIndex,
+		0,
+		&pVulkanRenderer->mainQueue);
 
 	free(paPhysicalDevices);
 
