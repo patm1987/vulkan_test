@@ -8,6 +8,8 @@
 
 struct vulkan_renderer_t {
 	VkInstance instance;
+	VkDevice device;
+	uint32_t queueIndex;
 };
 
 void PrintResult(VkResult result) {
@@ -70,7 +72,7 @@ BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType old
 }
 
 VulkanRenderer* VulkanRenderer_Create() {
-	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer*));
+	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 
 	VkResult result;
 
@@ -110,10 +112,15 @@ VulkanRenderer* VulkanRenderer_Create() {
 		pVulkanRenderer->instance,
 		&physicalDeviceCount,
 		paPhysicalDevices);
+	if (result != VK_SUCCESS) {
+		PrintResult(result);
+		exit(1);
+	}
 
 	// find one we like
 	VkPhysicalDevice chosenDevice = NULL;
 	VkPhysicalDeviceProperties chosenDeviceProperties;
+	uint32_t chosenQueueIndex = 0;
 	for (uint32_t deviceIndex = 0; deviceIndex < physicalDeviceCount; deviceIndex++) {
 		VkPhysicalDeviceProperties deviceProperties;
 		vkGetPhysicalDeviceProperties(paPhysicalDevices[deviceIndex], &deviceProperties);
@@ -128,7 +135,8 @@ VulkanRenderer* VulkanRenderer_Create() {
 				sizeof(VkQueueFamilyProperties) * queueFamilyPropertyCount);
 
 		BOOL queueValid = FALSE;
-		for (uint32_t queueIndex = 0; queueIndex < queueFamilyPropertyCount; queueIndex++) {
+		uint32_t queueIndex = 0;
+		for (; queueIndex < queueFamilyPropertyCount; queueIndex++) {
 			if (paQueueFamilyProperties[queueIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
 				queueValid = TRUE;
 				break;
@@ -138,6 +146,7 @@ VulkanRenderer* VulkanRenderer_Create() {
 		if (!chosenDevice) {
 			chosenDevice = paPhysicalDevices[deviceIndex];
 			chosenDeviceProperties = deviceProperties;
+			chosenQueueIndex = queueIndex;
 		}
 		else {
 			if (DeviceTypeIsSuperior(
@@ -146,6 +155,7 @@ VulkanRenderer* VulkanRenderer_Create() {
 
 				chosenDevice = paPhysicalDevices[deviceIndex];
 				chosenDeviceProperties = deviceProperties;
+				chosenQueueIndex = queueIndex;
 			}
 		}
 
@@ -159,6 +169,38 @@ VulkanRenderer* VulkanRenderer_Create() {
 	}
 
 	// make a logical device
+	float queuePriorities[1] = { 0.5f };
+	VkDeviceQueueCreateInfo deviceQueues[1] = {0};
+	deviceQueues[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	deviceQueues[0].pNext = NULL;
+	deviceQueues[0].flags = 0;
+	deviceQueues[0].queueFamilyIndex = chosenQueueIndex;
+	deviceQueues[0].queueCount = 1;
+	deviceQueues[0].pQueuePriorities = queuePriorities;
+
+	// stash this away now that we're using it
+	pVulkanRenderer->queueIndex = chosenQueueIndex;
+
+	VkDeviceCreateInfo deviceCreateInfo = { 0 };
+	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	deviceCreateInfo.pNext = NULL;
+	deviceCreateInfo.flags = 0;
+	deviceCreateInfo.queueCreateInfoCount = 1;
+	deviceCreateInfo.pQueueCreateInfos = deviceQueues;
+	deviceCreateInfo.enabledLayerCount = 0; // don't turn any layers on for now
+	deviceCreateInfo.ppEnabledLayerNames = NULL;
+	deviceCreateInfo.enabledExtensionCount = 0; // no extensions
+	deviceCreateInfo.ppEnabledExtensionNames = NULL;
+	deviceCreateInfo.pEnabledFeatures = NULL; // no special features for now
+	result = vkCreateDevice(
+		chosenDevice,
+		&deviceCreateInfo,
+		NULL,
+		&pVulkanRenderer->device);
+	if (result != VK_SUCCESS) {
+		PrintResult(result);
+		exit(1);
+	}
 
 	free(paPhysicalDevices);
 
@@ -172,6 +214,8 @@ void VulkanRenderer_Render(VulkanRenderer* pThis) {
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	assert(pThis);
 
+	vkDeviceWaitIdle(pThis->device);
+	vkDestroyDevice(pThis->device, NULL);
 	vkDestroyInstance(pThis->instance, NULL);
 	free(pThis);
 }
