@@ -149,19 +149,28 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="MemoryUtils.h" />
+    <ClInclude Include="ShaderManager.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="Utils.h" />
     <ClInclude Include="VulkanRenderer.h" />
     <ClInclude Include="Win32VulkanTest.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="ShaderManager.c" />
     <ClCompile Include="stdafx.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="Utils.c" />
     <ClCompile Include="VulkanRenderer.c" />
     <ClCompile Include="Win32VulkanTest.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\Shaders\main.frag" />
+    <None Include="Resources\Shaders\main.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -2,11 +2,21 @@
 
 #include "VulkanRenderer.h"
 
+#include "ShaderManager.h"
+
 #define STRINGIFY(s) STR(s)
 #define STR(s) #s
 #define PRINT_VK_RESULT(result) case result: printf( STRINGIFY(result) "\n"); break;
 
+typedef struct vertex_t {
+	float position [3];
+	float color [3];
+} Vertex;
+
 struct vulkan_renderer_t {
+	float width;
+	float height;
+
 	VkInstance instance;
 	VkDevice device;
 
@@ -17,22 +27,15 @@ struct vulkan_renderer_t {
 	VkCommandPool commandPool;
 
 	VkCommandBuffer setupCommandBuffer;
+
+	ShaderManager* pShaderManager;
 };
 
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 
-void PrintResult(VkResult result);
 BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
-
-#define VK_EXECUTE_REQUIRE_SUCCESS(cmd) { \
-	VkResult __result__ = (cmd);\
-	if (__result__ != VK_SUCCESS) {\
-		PrintResult(__result__);\
-		exit(1);\
-	}\
-}
 
 // order the devices by the kind we'd prefer to run on
 VkPhysicalDeviceType aDevicePrecidents[] = {
@@ -43,9 +46,17 @@ VkPhysicalDeviceType aDevicePrecidents[] = {
 	VK_PHYSICAL_DEVICE_TYPE_OTHER,
 };
 
-VulkanRenderer* VulkanRenderer_Create() {
+VulkanRenderer* VulkanRenderer_Create(float width, float height) {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
+
+	pVulkanRenderer->width = width;
+	pVulkanRenderer->height = height;
+
+	pVulkanRenderer->pShaderManager = ShaderManager_Create(
+		"Resources/Shaders",
+		".vert.spv",
+		".frag.spv");
 
 	// initialize vulkan
 	VkInstanceCreateInfo createInfo = { 0 };
@@ -184,6 +195,9 @@ void VulkanRenderer_Render(VulkanRenderer* pThis) {
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	assert(pThis);
 
+	ShaderManager_Destroy(pThis->pShaderManager);
+	pThis->pShaderManager = NULL;
+
 	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
@@ -232,6 +246,122 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	beginInfo.flags = 0;
 	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
+
+	VkViewport viewport = { 0 };
+	viewport.x = 0;
+	viewport.y = 0;
+	viewport.width = pThis->width;
+	viewport.height = pThis->height;
+	viewport.minDepth = 0.f;
+	viewport.maxDepth = 1.f;
+
+	// shader stuff
+	ShaderCode vertexShaderCode = ShaderManager_GetVertexShader(
+		pThis->pShaderManager,
+		"main");
+	VkShaderModuleCreateInfo vertexShaderCreateInfo = { 0 };
+	vertexShaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	vertexShaderCreateInfo.pNext = NULL;
+	vertexShaderCreateInfo.flags = 0;
+	vertexShaderCreateInfo.codeSize = vertexShaderCode.codeSize;
+	vertexShaderCreateInfo.pCode = vertexShaderCode.pCode;
+	VkShaderModule vertexShaderModule;
+	VK_REQUIRE_SUCCESS(
+		vkCreateShaderModule(
+			pThis->device,
+			&vertexShaderCreateInfo,
+			NULL,
+			&vertexShaderModule)
+		);
+
+	ShaderCode fragmentShaderCode = ShaderManager_GetFragmentShader(
+		pThis->pShaderManager,
+		"main");
+	VkShaderModuleCreateInfo fragmentShaderCreateInfo = { 0 };
+	fragmentShaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	fragmentShaderCreateInfo.pNext = NULL;
+	fragmentShaderCreateInfo.flags = 0;
+	fragmentShaderCreateInfo.codeSize = fragmentShaderCode.codeSize;
+	fragmentShaderCreateInfo.pCode = fragmentShaderCode.pCode;
+	VkShaderModule fragmentShaderModule;
+	VK_REQUIRE_SUCCESS(
+		vkCreateShaderModule(
+			pThis->device,
+			&fragmentShaderCreateInfo,
+			NULL,
+			&fragmentShaderModule)
+		);
+
+	VkPipelineShaderStageCreateInfo shaderStageCreateInfo[2] = { 0 };
+	shaderStageCreateInfo[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shaderStageCreateInfo[0].pNext = NULL;
+	shaderStageCreateInfo[0].flags = 0;
+	shaderStageCreateInfo[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+	shaderStageCreateInfo[0].module = vertexShaderModule;
+	shaderStageCreateInfo[0].pName = "main";
+	shaderStageCreateInfo[0].pSpecializationInfo = NULL;
+	shaderStageCreateInfo[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shaderStageCreateInfo[1].pNext = NULL;
+	shaderStageCreateInfo[1].flags = 0;
+	shaderStageCreateInfo[1].stage = VK_SHADER_STAGE_VERTEX_BIT;
+	shaderStageCreateInfo[1].module = fragmentShaderModule;
+	shaderStageCreateInfo[1].pName = "main";
+	shaderStageCreateInfo[1].pSpecializationInfo = NULL;
+
+	// create the input binding
+	VkVertexInputBindingDescription inputBindingDescriptions[1] = { 0 };
+	inputBindingDescriptions[0].binding = 0;
+	inputBindingDescriptions[0].stride = sizeof(Vertex);
+	inputBindingDescriptions[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+	// create vertex attribute descriptions
+	VkVertexInputAttributeDescription inputAttributeDescriptions[2] = { 0 };
+
+	// position attribute
+	inputAttributeDescriptions[0].location = 0;
+	inputAttributeDescriptions[0].binding = 0;
+	inputAttributeDescriptions[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	inputAttributeDescriptions[0].offset = offsetof(Vertex, position);
+
+	// color attribute
+	inputAttributeDescriptions[1].location = 1;
+	inputAttributeDescriptions[1].binding = 0;
+	inputAttributeDescriptions[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	inputAttributeDescriptions[1].offset = offsetof(Vertex, color);
+
+	VkPipelineVertexInputStateCreateInfo vertexInputStateInfo = { 0 };
+	vertexInputStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+	vertexInputStateInfo.pNext = NULL;
+	vertexInputStateInfo.flags = 0;
+	vertexInputStateInfo.vertexBindingDescriptionCount = 1;
+	vertexInputStateInfo.pVertexBindingDescriptions = inputBindingDescriptions;
+	vertexInputStateInfo.vertexAttributeDescriptionCount = 2;
+	vertexInputStateInfo.pVertexAttributeDescriptions = inputAttributeDescriptions;
+
+	VkGraphicsPipelineCreateInfo pipelineCreateInfo = { 0 };
+	pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+	pipelineCreateInfo.pNext = NULL;
+	pipelineCreateInfo.flags = 0;
+	pipelineCreateInfo.stageCount = 2;
+	pipelineCreateInfo.pStages = shaderStageCreateInfo;
+	pipelineCreateInfo.pVertexInputState = &vertexInputStateInfo;
+	//pipelineCreateInfo.pInputAssemblyState = 
+
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkCreateGraphicsPipelines(
+			pThis->device,
+			VK_NULL_HANDLE,
+			0,
+			)
+	);
+
+	ShaderManager_CleanupShaderCode(vertexShaderCode);
+
+	// TODO: destroy graphics pipeline
+	// TODO: destroy vertex shader
+	// TODO: destroy fragment shader
+
+	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
 }
 
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
@@ -242,37 +372,6 @@ void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
 			1,
 			&pThis->setupCommandBuffer);
 		pThis->setupCommandBuffer = NULL;
-	}
-}
-
-void PrintResult(VkResult result) {
-	printf("Vulkan Result: ");
-	switch (result) {
-		PRINT_VK_RESULT(VK_SUCCESS);
-		PRINT_VK_RESULT(VK_NOT_READY);
-		PRINT_VK_RESULT(VK_TIMEOUT);
-		PRINT_VK_RESULT(VK_EVENT_SET);
-		PRINT_VK_RESULT(VK_EVENT_RESET);
-		PRINT_VK_RESULT(VK_INCOMPLETE);
-		PRINT_VK_RESULT(VK_SUBOPTIMAL_KHR);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_HOST_MEMORY);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DEVICE_MEMORY);
-		PRINT_VK_RESULT(VK_ERROR_INITIALIZATION_FAILED);
-		PRINT_VK_RESULT(VK_ERROR_MEMORY_MAP_FAILED);
-		PRINT_VK_RESULT(VK_ERROR_DEVICE_LOST);
-		PRINT_VK_RESULT(VK_ERROR_EXTENSION_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_FEATURE_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_LAYER_NOT_PRESENT);
-		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DRIVER);
-		PRINT_VK_RESULT(VK_ERROR_TOO_MANY_OBJECTS);
-		PRINT_VK_RESULT(VK_ERROR_FORMAT_NOT_SUPPORTED);
-		PRINT_VK_RESULT(VK_ERROR_SURFACE_LOST_KHR);
-		PRINT_VK_RESULT(VK_ERROR_OUT_OF_DATE_KHR);
-		PRINT_VK_RESULT(VK_ERROR_INCOMPATIBLE_DISPLAY_KHR);
-		PRINT_VK_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
-		PRINT_VK_RESULT(VK_ERROR_VALIDATION_FAILED_EXT);
-	default:
-		printf("Unknown Result %d\n", result);
 	}
 }
 
