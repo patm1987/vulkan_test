@@ -32,6 +32,7 @@ struct vulkan_renderer_t {
 
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
+void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 
 VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice);
@@ -187,6 +188,7 @@ VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
 
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
 	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
+	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	return pVulkanRenderer;
 }
@@ -228,9 +230,6 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 }
 
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
-	// TODO: find out how many of the VkCreate's in this function can be moved out
-	// (ie: aren't the responsibility of the CommandBuffer)
-
 	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
 	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	commandBufferAllocateInfo.pNext = NULL;
@@ -243,7 +242,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 			pThis->device,
 			&commandBufferAllocateInfo,
 			&pThis->setupCommandBuffer)
-	);
+		);
 
 	// put in setup commands
 	VkCommandBufferBeginInfo beginInfo = { 0 };
@@ -252,7 +251,10 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	beginInfo.flags = 0;
 	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
+	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
+}
 
+void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	// shader stuff
 	ShaderCode vertexShaderCode = ShaderManager_GetVertexShader(
 		pThis->pShaderManager,
@@ -447,7 +449,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 			aDescriptorSetCreateInfos,
 			NULL,
 			&descriptorSetLayout)
-	);
+		);
 
 	VkPipelineLayoutCreateInfo pipelineLayoutCreate = { 0 };
 	pipelineLayoutCreate.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -465,7 +467,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 			&pipelineLayoutCreate,
 			NULL,
 			&pipelineLayout)
-	);
+		);
 
 	VkAttachmentDescription aRenderPassAttachments[2] = { 0 };
 
@@ -530,7 +532,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 			&renderPassCreate,
 			NULL,
 			&renderPass)
-	);
+		);
 
 	VkGraphicsPipelineCreateInfo pipelineCreateInfo = { 0 };
 	pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -560,9 +562,9 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 			VK_NULL_HANDLE,
 			1,
 			&pipelineCreateInfo,
-			NULL,
+			VK_NULL_HANDLE,
 			&graphicsPipeline)
-	);
+		);
 
 	ShaderManager_CleanupShaderCode(vertexShaderCode);
 	ShaderManager_CleanupShaderCode(fragmentShaderCode);
@@ -572,8 +574,6 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	// TODO: destroy fragment shader
 	// TODO: destroy pipeline layout
 	// TODO: destroy render pass
-
-	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
 }
 
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
