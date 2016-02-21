@@ -30,8 +30,6 @@ struct vulkan_renderer_t {
 
 	VkCommandPool commandPool;
 
-	// TODO: I don't want this in here, I want to explicitly pass it where it's needed
-	VkCommandBuffer setupCommandBuffer;
 	VkQueue mainQueue;
 
 	ShaderManager* pShaderManager;
@@ -50,23 +48,33 @@ struct vulkan_renderer_t {
 
 // creation
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
-void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSurface(VulkanRenderer* pThis);
 void VulkanRenderer_CacheSurfaceFormats(VulkanRenderer* pThis);
-void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis);
+void VulkanRenderer_CreateSwapchain(
+	VulkanRenderer* pThis,
+	VkCommandBuffer setupCommandBuffer);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 
 // destruction - there should be one for every creation above
-void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 void VulkanRenderer_FreeSurface(VulkanRenderer* pThis);
 void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis);
+
+// command buffer management
+// TODO: these want to be in a seperate command buffer management "class"
+VkCommandBuffer VulkanRenderer_SetupCommandBuffer(VulkanRenderer* pThis);
+void VulkanRenderer_DestroyCommandBuffer(
+	VulkanRenderer* pThis,
+	VkCommandBuffer commandBuffer);
+VulkanRenderer_BeginCommandBuffer(VkCommandBuffer commandBuffer);
+VulkanRenderer_EndCommandBuffer(VkCommandBuffer commandBuffer);
 
 void VulkanRenderer_ChangeImageLayout(
 	VulkanRenderer* pThis,
 	VkImage image,
 	VkImageAspectFlags aspectMask,
 	VkImageLayout oldImageLayout,
-	VkImageLayout newImageLayout);
+	VkImageLayout newImageLayout,
+	VkCommandBuffer setupCommandBuffer);
 VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice);
 
 BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
@@ -182,7 +190,6 @@ VulkanRenderer* VulkanRenderer_Create(
 			if (supportsPresent
 				&& (paQueueFamilyProperties[queueIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
 				
-				// TODO: have to put the vkGetPhysicalDeviceSurfaceSupportKHR here to see
 				// if this queue supports presenting. I'll just pray that it does for now!
 				queueValid = TRUE;
 				break;
@@ -269,12 +276,20 @@ VulkanRenderer* VulkanRenderer_Create(
 	// init the swap chain - it looks like the buffer is needed to move the images over
 	// "execute_pre_present_barrier" will need it for a vkCmdPipelineBarrier
 	// find whatever else needs info.cmd in the drawcube demo
-	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
+
+	VkCommandBuffer setupBuffer = VulkanRenderer_SetupCommandBuffer(pVulkanRenderer);
+	VulkanRenderer_BeginCommandBuffer(setupBuffer);
+
 	VulkanRenderer_CreateSurface(pVulkanRenderer); // TODO: move out of active cmd buffer
-	VulkanRenderer_CreateSwapchain(pVulkanRenderer);
+	VulkanRenderer_CreateSwapchain(pVulkanRenderer, setupBuffer);
 
 	// TODO: see what I have to do to make this NOT crash
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
+
+	VulkanRenderer_EndCommandBuffer(setupBuffer);
+	// TODO: submit command buffer
+	// TODO: wait for fence on submission
+	VulkanRenderer_DestroyCommandBuffer(pVulkanRenderer, setupBuffer);
 
 	return pVulkanRenderer;
 }
@@ -306,7 +321,6 @@ void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	pThis->pShaderManager = NULL;
 
 	VulkanRenderer_FreeSurface(pThis);
-	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
 	vkDestroyDevice(pThis->device, NULL);
@@ -330,31 +344,6 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 			NULL,
 			&pThis->commandPool)
 	);
-}
-
-void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
-	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
-	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	commandBufferAllocateInfo.pNext = NULL;
-	commandBufferAllocateInfo.commandPool = pThis->commandPool;
-	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	commandBufferAllocateInfo.commandBufferCount = 1;
-
-	REQUIRE_VK_SUCCESS(
-		vkAllocateCommandBuffers(
-			pThis->device,
-			&commandBufferAllocateInfo,
-			&pThis->setupCommandBuffer)
-		);
-
-	// put in setup commands
-	VkCommandBufferBeginInfo beginInfo = { 0 };
-	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-	beginInfo.pNext = NULL;
-	beginInfo.flags = 0;
-	REQUIRE_VK_SUCCESS(
-		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
-	REQUIRE_VK_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
 }
 
 void VulkanRenderer_CreateSurface(VulkanRenderer* pThis) {
@@ -415,10 +404,13 @@ void VulkanRenderer_CacheSurfaceFormats(VulkanRenderer* pThis) {
 	SAFE_FREE(paSurfaceFormats);
 }
 
-void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
+void VulkanRenderer_CreateSwapchain(
+	VulkanRenderer* pThis,
+	VkCommandBuffer setupCommandBuffer) {
 	assert(pThis);
 	assert(pThis->physicalDevice);
 	assert(pThis->surface);
+	assert(setupCommandBuffer);
 
 	VkSurfaceCapabilitiesKHR surfaceCapabilities;
 	REQUIRE_VK_SUCCESS(
@@ -509,7 +501,6 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 	swapChainCreateInfo.imageUsage
 		= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
 		| VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		//| VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT; // TODO: should I depth stencil?
 	swapChainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	swapChainCreateInfo.queueFamilyIndexCount = 0;
 	swapChainCreateInfo.pQueueFamilyIndices = NULL;
@@ -567,7 +558,8 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 			swapChainBuffer.image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			setupCommandBuffer);
 		swapChainBuffer.image = paSwapChainImages[i];
 		colorImageViewCreate.image = swapChainBuffer.image;
 
@@ -909,17 +901,6 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	// TODO: destroy render pass
 }
 
-void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
-	if (pThis->setupCommandBuffer) {
-		vkFreeCommandBuffers(
-			pThis->device,
-			pThis->commandPool,
-			1,
-			&pThis->setupCommandBuffer);
-		pThis->setupCommandBuffer = NULL;
-	}
-}
-
 void VulkanRenderer_FreeSurface(VulkanRenderer* pThis) {
 	vkDestroySurfaceKHR(pThis->instance, pThis->surface, NULL);
 	pThis->surface = NULL;
@@ -933,14 +914,65 @@ void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis) {
 	pThis->swapChain = NULL;
 }
 
+VkCommandBuffer VulkanRenderer_SetupCommandBuffer(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->commandPool);
+	assert(pThis->device);
+
+	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
+	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	commandBufferAllocateInfo.pNext = NULL;
+	commandBufferAllocateInfo.commandPool = pThis->commandPool;
+	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	commandBufferAllocateInfo.commandBufferCount = 1;
+
+	VkCommandBuffer commandBuffer;
+	REQUIRE_VK_SUCCESS(
+		vkAllocateCommandBuffers(
+			pThis->device,
+			&commandBufferAllocateInfo,
+			&commandBuffer)
+	);
+
+	return commandBuffer;
+}
+
+void VulkanRenderer_DestroyCommandBuffer(
+	VulkanRenderer* pThis,
+	VkCommandBuffer commandBuffer) {
+	assert(pThis);
+	assert(pThis->device);
+	assert(pThis->commandPool);
+
+	vkFreeCommandBuffers(
+		pThis->device,
+		pThis->commandPool,
+		1,
+		&commandBuffer);
+}
+
+VulkanRenderer_BeginCommandBuffer(VkCommandBuffer commandBuffer) {
+	// put in setup commands
+	VkCommandBufferBeginInfo beginInfo = { 0 };
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+	beginInfo.pNext = NULL;
+	beginInfo.flags = 0;
+	REQUIRE_VK_SUCCESS(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+}
+
+VulkanRenderer_EndCommandBuffer(VkCommandBuffer commandBuffer) {
+	REQUIRE_VK_SUCCESS(vkEndCommandBuffer(commandBuffer));
+}
+
 // TODO: may be optimal to also specify the command buffer that will depend on this?
 void VulkanRenderer_ChangeImageLayout(
 	VulkanRenderer* pThis,
 	VkImage image,
 	VkImageAspectFlags aspectMask,
 	VkImageLayout oldImageLayout,
-	VkImageLayout newImageLayout) {
-	assert(pThis->setupCommandBuffer);
+	VkImageLayout newImageLayout,
+	VkCommandBuffer setupCommandBuffer) {
+	assert(setupCommandBuffer);
 	assert(pThis->mainQueue);
 
 	VkImageMemoryBarrier imageMemoryBarrier = { 0 };
@@ -984,7 +1016,7 @@ void VulkanRenderer_ChangeImageLayout(
 	VkPipelineStageFlags dstStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
 	vkCmdPipelineBarrier(
-		pThis->setupCommandBuffer,
+		setupCommandBuffer,
 		srcStages,
 		dstStages,
 		0,
