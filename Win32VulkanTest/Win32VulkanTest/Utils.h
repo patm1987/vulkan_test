@@ -3,6 +3,9 @@
 
 typedef enum VkResult VkResult;
 
+#define STRINGIFY(s) STR(s)
+#define STR(s) #s
+
 #define VK_EXECUTE_REQUIRE_SUCCESS(cmd) { \
 	VkResult __result__ = (cmd);\
 	if (__result__ != VK_SUCCESS) {\

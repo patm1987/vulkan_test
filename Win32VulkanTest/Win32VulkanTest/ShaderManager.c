@@ -93,3 +93,51 @@ void ShaderManager_CleanupShaderCode(ShaderCode shaderCode) {
 	SAFE_FREE(shaderCode.pCode);
 	shaderCode.codeSize = 0;
 }
+
+
+FILE* ShaderManager_OpenShader(
+	ShaderManager* pThis,
+	const char* szFileName,
+	const char* szExtension) {
+	size_t shaderDirectoryLength = strlen(pThis->szShaderDirectory);
+	size_t extensionLength = strlen(szExtension);
+	size_t fileNameLength = strlen(szFileName);
+	size_t filePathBufferLength = shaderDirectoryLength
+		+ extensionLength
+		+ fileNameLength
+		+ 2; // we will add a '/' and a '\0'
+	char* szFilePath = (char*)malloc(sizeof(char)*filePathBufferLength);
+
+	size_t writeHead = 0;
+	strncpy_s(
+		szFilePath + writeHead,
+		filePathBufferLength,
+		pThis->szShaderDirectory,
+		shaderDirectoryLength);
+	writeHead += shaderDirectoryLength;
+	szFilePath[writeHead++] = '/';
+	strncpy_s(
+		szFilePath + writeHead,
+		filePathBufferLength,
+		szFileName,
+		fileNameLength);
+	writeHead += fileNameLength;
+	strncpy_s(
+		szFilePath + writeHead,
+		filePathBufferLength,
+		szExtension,
+		extensionLength);
+	writeHead += extensionLength;
+	assert(writeHead == filePathBufferLength - 1);
+
+	FILE* pFile;
+	fopen_s(&pFile, szFilePath, "rb");
+
+	free(szFilePath);
+
+	return pFile;
+}
+
+void ShaderManager_CloseShader(ShaderManager* pThis, FILE* pShaderFile) {
+	fclose(pShaderFile);
+}

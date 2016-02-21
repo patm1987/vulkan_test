@@ -3,10 +3,7 @@
 #include "VulkanRenderer.h"
 
 #include "ShaderManager.h"
-
-#define STRINGIFY(s) STR(s)
-#define STR(s) #s
-#define PRINT_VK_RESULT(result) case result: printf( STRINGIFY(result) "\n"); break;
+#include "Utils.h"
 
 typedef struct vertex_t {
 	float position [3];
@@ -14,8 +11,8 @@ typedef struct vertex_t {
 } Vertex;
 
 struct vulkan_renderer_t {
-	float width;
-	float height;
+	uint32_t width;
+	uint32_t height;
 
 	VkInstance instance;
 	VkDevice device;
@@ -29,13 +26,15 @@ struct vulkan_renderer_t {
 	VkCommandBuffer setupCommandBuffer;
 
 	ShaderManager* pShaderManager;
+
+	VkFormat depthBufferFormat;
 };
 
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
 
-VkFormat VulkanRenderer_SelectDepthFormat(VulkanRenderer* pThis);
+VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice);
 
 BOOL DeviceTypeIsSuperior(VkPhysicalDeviceType newType, VkPhysicalDeviceType oldType);
 
@@ -48,7 +47,7 @@ VkPhysicalDeviceType aDevicePrecidents[] = {
 	VK_PHYSICAL_DEVICE_TYPE_OTHER,
 };
 
-VulkanRenderer* VulkanRenderer_Create(float width, float height) {
+VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
 
@@ -144,6 +143,8 @@ VulkanRenderer* VulkanRenderer_Create(float width, float height) {
 
 		free(paQueueFamilyProperties);
 	}
+
+	pVulkanRenderer->depthBufferFormat = SelectDepthFormat(chosenDevice);
 
 	// make a logical device
 	float queuePriorities[1] = { 0.5f };
@@ -260,7 +261,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	vertexShaderCreateInfo.codeSize = vertexShaderCode.codeSize;
 	vertexShaderCreateInfo.pCode = vertexShaderCode.pCode;
 	VkShaderModule vertexShaderModule;
-	VK_REQUIRE_SUCCESS(
+	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&vertexShaderCreateInfo,
@@ -278,7 +279,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	fragmentShaderCreateInfo.codeSize = fragmentShaderCode.codeSize;
 	fragmentShaderCreateInfo.pCode = fragmentShaderCode.pCode;
 	VkShaderModule fragmentShaderModule;
-	VK_REQUIRE_SUCCESS(
+	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&fragmentShaderCreateInfo,
@@ -342,8 +343,8 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	VkViewport aViewports[1] = { 0 };
 	aViewports[0].x = 0;
 	aViewports[0].y = 0;
-	aViewports[0].width = pThis->width;
-	aViewports[0].height = pThis->height;
+	aViewports[0].width = (float)pThis->width;
+	aViewports[0].height = (float)pThis->height;
 	aViewports[0].minDepth = 0.f;
 	aViewports[0].maxDepth = 1.f;
 
@@ -437,7 +438,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 
 	VkDescriptorSetLayout descriptorSetLayout;
 	VkDescriptorSetLayout aSetLayouts[1] = { 0 };
-	VK_REQUIRE_SUCCESS(
+	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkCreateDescriptorSetLayout(
 			pThis->device,
 			aDescriptorSetCreateInfos,
@@ -455,7 +456,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	pipelineLayoutCreate.pPushConstantRanges = NULL;
 
 	VkPipelineLayout pipelineLayout;
-	VK_REQUIRE_SUCCESS(
+	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkCreatePipelineLayout(
 			pThis->device,
 			&pipelineLayoutCreate,
@@ -478,7 +479,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 
 	// zbuffer
 	aRenderPassAttachments[1].flags = 0;
-	aRenderPassAttachments[1].format = VulkanRenderer_SelectDepthFormat(pThis);
+	aRenderPassAttachments[1].format = pThis->depthBufferFormat;
 	aRenderPassAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
 	aRenderPassAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	aRenderPassAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -520,7 +521,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 
 	// TODO: this can be entirely seperate from the pipeline create!
 	VkRenderPass renderPass;
-	VK_REQUIRE_SUCCESS(
+	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkCreateRenderPass(
 			pThis->device,
 			&renderPassCreate,
@@ -591,11 +592,11 @@ const VkFormat kaDepthFormats[] = {
 	VK_FORMAT_D16_UNORM
 };
 
-VkFormat VulkanRenderer_SelectDepthFormat(VulkanRenderer* pThis) {
+VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice) {
 	for (int i = 0; i < sizeof(kaDepthFormats) / sizeof(VkFormat); i++) {
 		VkFormatProperties formatProperties;
 		vkGetPhysicalDeviceFormatProperties(
-			pThis->device,
+			physicalDevice,
 			kaDepthFormats[i],
 			&formatProperties);
 		if (formatProperties.optimalTilingFeatures
@@ -603,10 +604,10 @@ VkFormat VulkanRenderer_SelectDepthFormat(VulkanRenderer* pThis) {
 
 			return kaDepthFormats[i];
 		}
-		
-		assert(FALSE);
-		return VK_FORMAT_D16_UNORM;
 	}
+
+	assert(FALSE);
+	return VK_FORMAT_D16_UNORM;
 }
 
 /*!

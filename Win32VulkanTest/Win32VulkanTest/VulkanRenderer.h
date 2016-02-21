@@ -8,7 +8,7 @@ extern "C" {
 
 typedef struct vulkan_renderer_t VulkanRenderer;
 
-VulkanRenderer* VulkanRenderer_Create(float width, float height);
+VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height);
 void VulkanRenderer_Render(VulkanRenderer* pThis);
 void VulkanRenderer_Destroy(VulkanRenderer* pThis);
 

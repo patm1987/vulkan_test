@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "Utils.h"
 
+#define PRINT_VK_RESULT(result) case result: printf( STRINGIFY(result) "\n"); break;
+
 void PrintResult(VkResult result) {
 	printf("Vulkan Result: ");
 	switch (result) {
