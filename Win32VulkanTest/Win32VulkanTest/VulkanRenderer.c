@@ -228,6 +228,9 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 }
 
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
+	// TODO: find out how many of the VkCreate's in this function can be moved out
+	// (ie: aren't the responsibility of the CommandBuffer)
+
 	VkCommandBufferAllocateInfo commandBufferAllocateInfo = { 0 };
 	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	commandBufferAllocateInfo.pNext = NULL;

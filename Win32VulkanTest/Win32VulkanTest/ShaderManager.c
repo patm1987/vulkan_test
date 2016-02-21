@@ -68,9 +68,12 @@ ShaderCode ShaderManager_GetVertexShader(
 	fpos_t fileLength;
 	fgetpos(pShaderFile, &fileLength);
 	fseek(pShaderFile, 0, SEEK_SET);
+
+	assert(fileLength > 0);
+
 	char* szFileContents = SAFE_ALLOCATE_ARRAY(char, fileLength);
 
-	fgets(szFileContents, (int)fileLength, pShaderFile);
+	fread(szFileContents, (size_t)fileLength, 1, pShaderFile);
 
 	ShaderManager_CloseShader(pThis, pShaderFile);
 
@@ -83,7 +86,30 @@ ShaderCode ShaderManager_GetVertexShader(
 ShaderCode ShaderManager_GetFragmentShader(
 	ShaderManager* pThis,
 	const char* szShaderName) {
-	assert(FALSE);
+	// TODO: virtually copy/paste from GetVertexShader
+
+	FILE* pShaderFile = ShaderManager_OpenShader(
+		pThis,
+		szShaderName,
+		pThis->szFragmentExtension);
+
+	fseek(pShaderFile, 0, SEEK_END);
+	fpos_t fileLength;
+	fgetpos(pShaderFile, &fileLength);
+	fseek(pShaderFile, 0, SEEK_SET);
+
+	assert(fileLength > 0);
+
+	char* szFileContents = SAFE_ALLOCATE_ARRAY(char, fileLength);
+
+	fread(szFileContents, (size_t)fileLength, 1, pShaderFile);
+
+	ShaderManager_CloseShader(pThis, pShaderFile);
+
+	return (ShaderCode) {
+		(uint32_t*)szFileContents,
+			fileLength
+	};
 }
 
 void ShaderManager_CleanupShaderCode(ShaderCode shaderCode) {
@@ -120,6 +146,7 @@ FILE* ShaderManager_OpenShader(
 
 	FILE* pFile;
 	fopen_s(&pFile, szFilePath, "rb");
+	assert(pFile);
 
 	SAFE_FREE(szFilePath);
 

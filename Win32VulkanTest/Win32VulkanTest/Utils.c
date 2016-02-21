@@ -1,10 +1,10 @@
 #include "stdafx.h"
 #include "Utils.h"
 
-#define PRINT_VK_RESULT(result) case result: printf( STRINGIFY(result) "\n"); break;
+#define PRINT_VK_RESULT(result) case result: OutputDebugStringA( STRINGIFY(result) "\n"); break;
 
 void PrintResult(VkResult result) {
-	printf("Vulkan Result: ");
+	OutputDebugStringA("Vulkan Result: ");
 	switch (result) {
 		PRINT_VK_RESULT(VK_SUCCESS);
 		PRINT_VK_RESULT(VK_NOT_READY);
@@ -30,6 +30,6 @@ void PrintResult(VkResult result) {
 		PRINT_VK_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
 		PRINT_VK_RESULT(VK_ERROR_VALIDATION_FAILED_EXT);
 	default:
-		printf("Unknown Result %d\n", result);
+		OutputDebugStringA("Unknown Result %d\n", result);
 	}
 }
