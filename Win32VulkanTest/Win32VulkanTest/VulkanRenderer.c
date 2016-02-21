@@ -6,6 +6,9 @@
 #include "ShaderManager.h"
 #include "Utils.h"
 
+// timeout in nanoseconds
+#define FENCE_TIMEOUT 100000000
+
 typedef struct vertex_t {
 	float position [3];
 	float color [3];
@@ -287,8 +290,40 @@ VulkanRenderer* VulkanRenderer_Create(
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	VulkanRenderer_EndCommandBuffer(setupBuffer);
-	// TODO: submit command buffer
-	// TODO: wait for fence on submission
+
+	// setup fence to submit the setup buffer
+	VkFenceCreateInfo fenceCreateInfo = { 0 };
+	fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	fenceCreateInfo.pNext = NULL;
+	fenceCreateInfo.flags = 0;
+	VkFence setupFence;
+	vkCreateFence(pVulkanRenderer->device, &fenceCreateInfo, NULL, &setupFence);
+
+	VkSubmitInfo submitInfo = { 0 };
+	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submitInfo.pNext = NULL;
+	submitInfo.waitSemaphoreCount = 0;
+	submitInfo.pWaitSemaphores = NULL;
+	submitInfo.pWaitDstStageMask = NULL;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &setupBuffer;
+	submitInfo.signalSemaphoreCount = 0;
+	submitInfo.pSignalSemaphores = NULL;
+
+	REQUIRE_VK_SUCCESS(
+		vkQueueSubmit(pVulkanRenderer->mainQueue, 1, &submitInfo, setupFence)
+	);
+
+	VkResult fenceResult;
+	do {
+		fenceResult = vkWaitForFences(
+			pVulkanRenderer->device,
+			1,
+			&setupFence,
+			VK_TRUE,
+			FENCE_TIMEOUT);
+	} while (fenceResult == VK_TIMEOUT);
+
 	VulkanRenderer_DestroyCommandBuffer(pVulkanRenderer, setupBuffer);
 
 	return pVulkanRenderer;
