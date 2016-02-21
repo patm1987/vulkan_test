@@ -225,6 +225,8 @@ VulkanRenderer* VulkanRenderer_Create(
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
 	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
 	VulkanRenderer_CreateSurface(pVulkanRenderer);
+
+	// TODO: see what I have to do to make this NOT crash
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	return pVulkanRenderer;
