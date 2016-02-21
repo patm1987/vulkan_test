@@ -36,6 +36,8 @@ struct vulkan_renderer_t {
 	VkQueue mainQueue;
 
 	ShaderManager* pShaderManager;
+	VkShaderModule vertexShader;
+	VkShaderModule fragmentShader;
 
 	VkFormat surfaceFormat;
 	VkFormat depthBufferFormat;
@@ -56,6 +58,7 @@ void VulkanRenderer_CacheSurfaceFormats(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSwapchain(
 	VulkanRenderer* pThis,
 	VkCommandBuffer setupCommandBuffer);
+void VulkanRenderer_CreateShaders(VulkanRenderer* pThis);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 
 // destruction - there should be one for every creation above
@@ -286,6 +289,7 @@ VulkanRenderer* VulkanRenderer_Create(
 	VulkanRenderer_CreateSurface(pVulkanRenderer); // TODO: move out of active cmd buffer
 	VulkanRenderer_CreateSwapchain(pVulkanRenderer, setupBuffer);
 
+	VulkanRenderer_CreateShaders(pVulkanRenderer);
 	// TODO: see what I have to do to make this NOT crash
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
@@ -614,8 +618,11 @@ void VulkanRenderer_CreateSwapchain(
 	SAFE_FREE(paPresentModes);
 }
 
-void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
-	// shader stuff
+void VulkanRenderer_CreateShaders(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->pShaderManager);
+	assert(pThis->device);
+
 	ShaderCode vertexShaderCode = ShaderManager_GetVertexShader(
 		pThis->pShaderManager,
 		"main");
@@ -625,14 +632,13 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	vertexShaderCreateInfo.flags = 0;
 	vertexShaderCreateInfo.codeSize = vertexShaderCode.codeSize;
 	vertexShaderCreateInfo.pCode = vertexShaderCode.pCode;
-	VkShaderModule vertexShaderModule;
 	REQUIRE_VK_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&vertexShaderCreateInfo,
 			NULL,
-			&vertexShaderModule)
-		);
+			&pThis->vertexShader)
+	);
 
 	ShaderCode fragmentShaderCode = ShaderManager_GetFragmentShader(
 		pThis->pShaderManager,
@@ -643,28 +649,41 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	fragmentShaderCreateInfo.flags = 0;
 	fragmentShaderCreateInfo.codeSize = fragmentShaderCode.codeSize;
 	fragmentShaderCreateInfo.pCode = fragmentShaderCode.pCode;
-	VkShaderModule fragmentShaderModule;
 	REQUIRE_VK_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&fragmentShaderCreateInfo,
 			NULL,
-			&fragmentShaderModule)
-		);
+			&pThis->fragmentShader)
+	);
+
+	ShaderManager_CleanupShaderCode(vertexShaderCode);
+	ShaderManager_CleanupShaderCode(fragmentShaderCode);
+
+	assert(pThis->vertexShader);
+	assert(pThis->fragmentShader);
+
+	// TODO: destroy vertex shader
+	// TODO: destroy fragment shader
+}
+
+void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->device);
 
 	VkPipelineShaderStageCreateInfo aShaderStageCreateInfo[2] = { 0 };
 	aShaderStageCreateInfo[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	aShaderStageCreateInfo[0].pNext = NULL;
 	aShaderStageCreateInfo[0].flags = 0;
 	aShaderStageCreateInfo[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-	aShaderStageCreateInfo[0].module = vertexShaderModule;
+	aShaderStageCreateInfo[0].module = pThis->vertexShader;
 	aShaderStageCreateInfo[0].pName = "main";
 	aShaderStageCreateInfo[0].pSpecializationInfo = NULL;
 	aShaderStageCreateInfo[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	aShaderStageCreateInfo[1].pNext = NULL;
 	aShaderStageCreateInfo[1].flags = 0;
 	aShaderStageCreateInfo[1].stage = VK_SHADER_STAGE_VERTEX_BIT;
-	aShaderStageCreateInfo[1].module = fragmentShaderModule;
+	aShaderStageCreateInfo[1].module = pThis->fragmentShader;
 	aShaderStageCreateInfo[1].pName = "main";
 	aShaderStageCreateInfo[1].pSpecializationInfo = NULL;
 
@@ -848,8 +867,8 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	aRenderPassAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
 	aRenderPassAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	aRenderPassAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	aRenderPassAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	aRenderPassAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	aRenderPassAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	aRenderPassAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
 	aRenderPassAttachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 	aRenderPassAttachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -926,12 +945,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 			&graphicsPipeline)
 		);
 
-	ShaderManager_CleanupShaderCode(vertexShaderCode);
-	ShaderManager_CleanupShaderCode(fragmentShaderCode);
-
 	// TODO: destroy graphics pipeline
-	// TODO: destroy vertex shader
-	// TODO: destroy fragment shader
 	// TODO: destroy pipeline layout
 	// TODO: destroy render pass
 }
