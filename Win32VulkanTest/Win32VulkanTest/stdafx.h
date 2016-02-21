@@ -6,6 +6,10 @@
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers
+
+#define VK_USE_PLATFORM_WIN32_KHR
+#define NOMINMAX // remove windows' min() and max()
+
 // Windows Header Files:
 #include <windows.h>
 

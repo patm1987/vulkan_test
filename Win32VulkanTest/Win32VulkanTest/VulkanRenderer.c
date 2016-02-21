@@ -2,6 +2,7 @@
 
 #include "VulkanRenderer.h"
 
+#include "MemoryUtils.h"
 #include "ShaderManager.h"
 #include "Utils.h"
 
@@ -15,25 +16,37 @@ struct vulkan_renderer_t {
 	uint32_t height;
 
 	VkInstance instance;
+	VkPhysicalDevice physicalDevice;
 	VkDevice device;
+	VkSurfaceKHR surface;
 
 	uint32_t queueFamilyIndex;
 
+	VkCommandPool commandPool;
+	VkCommandBuffer setupCommandBuffer;
+
 	// TODO: do I need this?
 	VkQueue mainQueue;
-	VkCommandPool commandPool;
-
-	VkCommandBuffer setupCommandBuffer;
 
 	ShaderManager* pShaderManager;
 
+	VkFormat surfaceFormat;
 	VkFormat depthBufferFormat;
+
+	// TODO: Windows stuff - abstract out!
+	HINSTANCE hInstance;
+	HWND hWnd;
 };
 
+// creation
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
+void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
+
+// destruction - there should be one for every creation above
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
+void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis);
 
 VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice);
 
@@ -48,7 +61,11 @@ VkPhysicalDeviceType aDevicePrecidents[] = {
 	VK_PHYSICAL_DEVICE_TYPE_OTHER,
 };
 
-VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
+VulkanRenderer* VulkanRenderer_Create(
+	uint32_t width,
+	uint32_t height,
+	HINSTANCE hInstance,
+	HWND hWnd) {
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
 
@@ -115,6 +132,8 @@ VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
 		uint32_t queueIndex = 0;
 		for (; queueIndex < queueFamilyPropertyCount; queueIndex++) {
 			if (paQueueFamilyProperties[queueIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+				// TODO: have to put the vkGetPhysicalDeviceSurfaceSupportKHR here to see
+				// if this queue supports presenting. I'll just pray that it does for now!
 				queueValid = TRUE;
 				break;
 			}
@@ -145,6 +164,7 @@ VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
 		free(paQueueFamilyProperties);
 	}
 
+	pVulkanRenderer->physicalDevice = chosenDevice;
 	pVulkanRenderer->depthBufferFormat = SelectDepthFormat(chosenDevice);
 
 	// make a logical device
@@ -188,6 +208,7 @@ VulkanRenderer* VulkanRenderer_Create(uint32_t width, uint32_t height) {
 
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
 	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
+	VulkanRenderer_CreateSwapchain(pVulkanRenderer);
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	return pVulkanRenderer;
@@ -203,6 +224,7 @@ void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	ShaderManager_Destroy(pThis->pShaderManager);
 	pThis->pShaderManager = NULL;
 
+	VulkanRenderer_FreeSwapchain(pThis);
 	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
@@ -252,6 +274,65 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	VK_EXECUTE_REQUIRE_SUCCESS(
 		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
 	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
+}
+
+void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
+	// TODO: Win32 code here! abstract me!
+	VkWin32SurfaceCreateInfoKHR createInfo = { 0 };
+	createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+	createInfo.pNext = NULL;
+	createInfo.flags = 0;
+	createInfo.hinstance = pThis->hInstance;
+	createInfo.hwnd = pThis->hWnd;
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkCreateWin32SurfaceKHR(
+			pThis->instance,
+			&createInfo,
+			NULL,
+			&pThis->surface)
+	);
+
+	VkBool32 supportsPresent;
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkGetPhysicalDeviceSurfaceSupportKHR(
+			pThis->physicalDevice,
+			pThis->queueFamilyIndex,
+			pThis->surface,
+			&supportsPresent)
+	);
+
+	// TODO: do this check when finding a queue
+	assert(supportsPresent);
+
+	uint32_t formatCount;
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkGetPhysicalDeviceSurfaceFormatsKHR(
+			pThis->physicalDevice,
+			pThis->surface,
+			&formatCount,
+			NULL)
+	);
+
+	VkSurfaceFormatKHR* paSurfaceFormats
+		= SAFE_ALLOCATE_ARRAY(VkSurfaceFormatKHR, formatCount);
+
+	VK_EXECUTE_REQUIRE_SUCCESS(
+		vkGetPhysicalDeviceSurfaceFormatsKHR(
+			pThis->physicalDevice,
+			pThis->surface,
+			&formatCount,
+			paSurfaceFormats)
+	);
+
+	if (formatCount == 1 && paSurfaceFormats[0].format == VK_FORMAT_UNDEFINED) {
+		assert(FALSE); // for now
+		pThis->surfaceFormat = VK_FORMAT_B8G8R8A8_UNORM;
+	}
+	else {
+		pThis->surfaceFormat = paSurfaceFormats[0].format;
+	}
+
+	SAFE_FREE(paSurfaceFormats);
 }
 
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
@@ -473,7 +554,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 
 	// cbuffer
 	aRenderPassAttachments[0].flags = 0;
-	aRenderPassAttachments[0].format = VK_FORMAT_B8G8R8A8_UNORM;
+	aRenderPassAttachments[0].format = pThis->surfaceFormat;
 	aRenderPassAttachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
 	aRenderPassAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	aRenderPassAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -585,6 +666,10 @@ void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
 			&pThis->setupCommandBuffer);
 		pThis->setupCommandBuffer = NULL;
 	}
+}
+
+void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis) {
+	vkDestroySurfaceKHR(pThis->instance, pThis->surface, NULL);
 }
 
 const VkFormat kaDepthFormats[] = {

@@ -30,6 +30,6 @@ void PrintResult(VkResult result) {
 		PRINT_VK_RESULT(VK_ERROR_NATIVE_WINDOW_IN_USE_KHR);
 		PRINT_VK_RESULT(VK_ERROR_VALIDATION_FAILED_EXT);
 	default:
-		OutputDebugStringA("Unknown Result %d\n", result);
+		OutputDebugStringA("Unknown Result\n");
 	}
 }

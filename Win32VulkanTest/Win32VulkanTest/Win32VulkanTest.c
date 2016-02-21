@@ -91,7 +91,9 @@ INT WinMain(
 	assert(gotClientRect);
 	appData.pVulkanRenderer = VulkanRenderer_Create(
 		clientRect.right - clientRect.left,
-		clientRect.bottom - clientRect.top);
+		clientRect.bottom - clientRect.top,
+		hInstance,
+		hWindow);
 
 	SetWindowLongPtr(hWindow, GWLP_USERDATA, (LONG_PTR)&appData);
 
