@@ -29,6 +29,8 @@ struct vulkan_renderer_t {
 	uint32_t queueFamilyIndex;
 
 	VkCommandPool commandPool;
+
+	// TODO: I don't want this in here, I want to explicitly pass it where it's needed
 	VkCommandBuffer setupCommandBuffer;
 	VkQueue mainQueue;
 
@@ -50,6 +52,7 @@ struct vulkan_renderer_t {
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSurface(VulkanRenderer* pThis);
+void VulkanRenderer_CacheSurfaceFormats(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 
@@ -82,16 +85,29 @@ VulkanRenderer* VulkanRenderer_Create(
 	uint32_t height,
 	HINSTANCE hInstance,
 	HWND hWnd) {
+	assert(hInstance);
+	assert(hWnd);
+
 	VulkanRenderer* pVulkanRenderer = (VulkanRenderer*)malloc(sizeof(VulkanRenderer));
 	memset(pVulkanRenderer, 0, sizeof(VulkanRenderer));
 
 	pVulkanRenderer->width = width;
 	pVulkanRenderer->height = height;
+	pVulkanRenderer->hInstance = hInstance;
+	pVulkanRenderer->hWnd = hWnd;
 
 	pVulkanRenderer->pShaderManager = ShaderManager_Create(
 		"Resources/Shaders",
 		".vert.spv",
 		".frag.spv");
+
+	const char* aszInstanceExtensionNames[] = {
+		VK_KHR_SURFACE_EXTENSION_NAME,
+
+		// TODO: this is windows code, extract!
+		VK_KHR_WIN32_SURFACE_EXTENSION_NAME
+	};
+	uint32_t instanceExtensionCount = sizeof(aszInstanceExtensionNames) / sizeof(const char*);
 
 	// initialize vulkan
 	VkInstanceCreateInfo createInfo = { 0 };
@@ -101,16 +117,16 @@ VulkanRenderer* VulkanRenderer_Create(
 	createInfo.pApplicationInfo = NULL;
 	createInfo.enabledLayerCount = 0;
 	createInfo.ppEnabledLayerNames = NULL;
-	createInfo.enabledExtensionCount = 0;
-	createInfo.ppEnabledExtensionNames = NULL;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	createInfo.enabledExtensionCount = instanceExtensionCount;
+	createInfo.ppEnabledExtensionNames = aszInstanceExtensionNames;
+	REQUIRE_VK_SUCCESS(
 		vkCreateInstance(&createInfo, NULL, &pVulkanRenderer->instance)
 	);
 
 	// get all the physical devices
 	// first find the numer of devices
 	uint32_t physicalDeviceCount;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkEnumeratePhysicalDevices(
 			pVulkanRenderer->instance,
 			&physicalDeviceCount,
@@ -120,12 +136,16 @@ VulkanRenderer* VulkanRenderer_Create(
 	// then get the devices
 	VkPhysicalDevice* paPhysicalDevices = (VkPhysicalDevice*)malloc(
 		sizeof(VkPhysicalDevice) * physicalDeviceCount);
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkEnumeratePhysicalDevices(
 			pVulkanRenderer->instance,
 			&physicalDeviceCount,
 			paPhysicalDevices)
 	);
+
+	VulkanRenderer_CreateSurface(pVulkanRenderer);
+
+	assert(pVulkanRenderer->surface);
 
 	// find one we like
 	VkPhysicalDevice chosenDevice = NULL;
@@ -147,7 +167,21 @@ VulkanRenderer* VulkanRenderer_Create(
 		BOOL queueValid = FALSE;
 		uint32_t queueIndex = 0;
 		for (; queueIndex < queueFamilyPropertyCount; queueIndex++) {
-			if (paQueueFamilyProperties[queueIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+			VkBool32 supportsPresent;
+			REQUIRE_VK_SUCCESS(
+				vkGetPhysicalDeviceSurfaceSupportKHR(
+					paPhysicalDevices[deviceIndex],
+					queueIndex,
+					pVulkanRenderer->surface,
+					&supportsPresent)
+			);
+
+			// TODO: do this check when finding a queue
+			assert(supportsPresent);
+
+			if (supportsPresent
+				&& (paQueueFamilyProperties[queueIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+				
 				// TODO: have to put the vkGetPhysicalDeviceSurfaceSupportKHR here to see
 				// if this queue supports presenting. I'll just pray that it does for now!
 				queueValid = TRUE;
@@ -193,6 +227,11 @@ VulkanRenderer* VulkanRenderer_Create(
 	deviceQueues[0].queueCount = 1;
 	deviceQueues[0].pQueuePriorities = queuePriorities;
 
+	const char* aszDeviceExtensionNames[] = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+	uint32_t deviceExtensionCount = sizeof(aszDeviceExtensionNames) / sizeof(const char*);
+
 	VkDeviceCreateInfo deviceCreateInfo = { 0 };
 	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 	deviceCreateInfo.pNext = NULL;
@@ -201,10 +240,10 @@ VulkanRenderer* VulkanRenderer_Create(
 	deviceCreateInfo.pQueueCreateInfos = deviceQueues;
 	deviceCreateInfo.enabledLayerCount = 0; // don't turn any layers on for now
 	deviceCreateInfo.ppEnabledLayerNames = NULL;
-	deviceCreateInfo.enabledExtensionCount = 0; // no extensions
-	deviceCreateInfo.ppEnabledExtensionNames = NULL;
+	deviceCreateInfo.enabledExtensionCount = deviceExtensionCount; // no extensions
+	deviceCreateInfo.ppEnabledExtensionNames = aszDeviceExtensionNames;
 	deviceCreateInfo.pEnabledFeatures = NULL; // no special features for now
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateDevice(
 			chosenDevice,
 			&deviceCreateInfo,
@@ -222,9 +261,17 @@ VulkanRenderer* VulkanRenderer_Create(
 
 	free(paPhysicalDevices);
 
+	VulkanRenderer_CacheSurfaceFormats(pVulkanRenderer);
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
+
+	// TODO: this is all wrong!
+	// I need to begin the command buffer
+	// init the swap chain - it looks like the buffer is needed to move the images over
+	// "execute_pre_present_barrier" will need it for a vkCmdPipelineBarrier
+	// find whatever else needs info.cmd in the drawcube demo
 	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
-	VulkanRenderer_CreateSurface(pVulkanRenderer);
+	VulkanRenderer_CreateSurface(pVulkanRenderer); // TODO: move out of active cmd buffer
+	VulkanRenderer_CreateSwapchain(pVulkanRenderer);
 
 	// TODO: see what I have to do to make this NOT crash
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
@@ -234,6 +281,22 @@ VulkanRenderer* VulkanRenderer_Create(
 
 void VulkanRenderer_Render(VulkanRenderer* pThis) {
 	assert(pThis);
+
+	VkPresentInfoKHR presentInfo = { 0 };
+	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	presentInfo.pNext = NULL;
+	presentInfo.waitSemaphoreCount = 0;
+	presentInfo.pWaitSemaphores = NULL;
+	presentInfo.swapchainCount = 1;
+	presentInfo.pSwapchains = &pThis->swapChain;
+	presentInfo.pImageIndices = &pThis->currentBuffer;
+	presentInfo.pResults = NULL;
+
+	// TODO: define fences, wait for fences (resource loading, drawing, &c)
+
+	REQUIRE_VK_SUCCESS(
+		vkQueuePresentKHR(pThis->mainQueue, &presentInfo)
+	);
 }
 
 void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
@@ -260,7 +323,7 @@ void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 	createInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	createInfo.queueFamilyIndex = pThis->queueFamilyIndex;
 
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateCommandPool(
 			pThis->device,
 			&createInfo,
@@ -277,7 +340,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	commandBufferAllocateInfo.commandBufferCount = 1;
 
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkAllocateCommandBuffers(
 			pThis->device,
 			&commandBufferAllocateInfo,
@@ -289,12 +352,17 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	beginInfo.pNext = NULL;
 	beginInfo.flags = 0;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkBeginCommandBuffer(pThis->setupCommandBuffer, &beginInfo));
-	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
+	REQUIRE_VK_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
 }
 
 void VulkanRenderer_CreateSurface(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->hInstance);
+	assert(pThis->hWnd);
+	assert(pThis->instance);
+
 	// TODO: Win32 code here! abstract me!
 	VkWin32SurfaceCreateInfoKHR createInfo = { 0 };
 	createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -302,45 +370,39 @@ void VulkanRenderer_CreateSurface(VulkanRenderer* pThis) {
 	createInfo.flags = 0;
 	createInfo.hinstance = pThis->hInstance;
 	createInfo.hwnd = pThis->hWnd;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateWin32SurfaceKHR(
 			pThis->instance,
 			&createInfo,
 			NULL,
 			&pThis->surface)
 	);
+}
 
-	VkBool32 supportsPresent;
-	VK_EXECUTE_REQUIRE_SUCCESS(
-		vkGetPhysicalDeviceSurfaceSupportKHR(
-			pThis->physicalDevice,
-			pThis->queueFamilyIndex,
-			pThis->surface,
-			&supportsPresent)
-	);
-
-	// TODO: do this check when finding a queue
-	assert(supportsPresent);
+void VulkanRenderer_CacheSurfaceFormats(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->physicalDevice);
+	assert(pThis->surface);
 
 	uint32_t formatCount;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetPhysicalDeviceSurfaceFormatsKHR(
 			pThis->physicalDevice,
 			pThis->surface,
 			&formatCount,
 			NULL)
-	);
+		);
 
 	VkSurfaceFormatKHR* paSurfaceFormats
 		= SAFE_ALLOCATE_ARRAY(VkSurfaceFormatKHR, formatCount);
 
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetPhysicalDeviceSurfaceFormatsKHR(
 			pThis->physicalDevice,
 			pThis->surface,
 			&formatCount,
 			paSurfaceFormats)
-	);
+		);
 
 	if (formatCount == 1 && paSurfaceFormats[0].format == VK_FORMAT_UNDEFINED) {
 		assert(FALSE); // for now
@@ -354,8 +416,12 @@ void VulkanRenderer_CreateSurface(VulkanRenderer* pThis) {
 }
 
 void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->physicalDevice);
+	assert(pThis->surface);
+
 	VkSurfaceCapabilitiesKHR surfaceCapabilities;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
 			pThis->physicalDevice,
 			pThis->surface,
@@ -363,7 +429,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 	);
 
 	uint32_t presentModeCount;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetPhysicalDeviceSurfacePresentModesKHR(
 			pThis->physicalDevice,
 			pThis->surface,
@@ -373,7 +439,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 
 	VkPresentModeKHR* paPresentModes
 		= SAFE_ALLOCATE_ARRAY(VkPresentModeKHR, presentModeCount);
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetPhysicalDeviceSurfacePresentModesKHR(
 			pThis->physicalDevice,
 			pThis->surface,
@@ -448,7 +514,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 	swapChainCreateInfo.queueFamilyIndexCount = 0;
 	swapChainCreateInfo.pQueueFamilyIndices = NULL;
 
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateSwapchainKHR(
 			pThis->device,
 			&swapChainCreateInfo,
@@ -456,7 +522,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 			&pThis->swapChain)
 	);
 
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetSwapchainImagesKHR(
 			pThis->device,
 			pThis->swapChain,
@@ -465,7 +531,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 	);
 
 	VkImage* paSwapChainImages = SAFE_ALLOCATE_ARRAY(VkImage, pThis->swapChainImageCount);
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkGetSwapchainImagesKHR(
 			pThis->device,
 			pThis->swapChain,
@@ -505,7 +571,7 @@ void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
 		swapChainBuffer.image = paSwapChainImages[i];
 		colorImageViewCreate.image = swapChainBuffer.image;
 
-		VK_EXECUTE_REQUIRE_SUCCESS(
+		REQUIRE_VK_SUCCESS(
 			vkCreateImageView(
 				pThis->device,
 				&colorImageViewCreate,
@@ -533,7 +599,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	vertexShaderCreateInfo.codeSize = vertexShaderCode.codeSize;
 	vertexShaderCreateInfo.pCode = vertexShaderCode.pCode;
 	VkShaderModule vertexShaderModule;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&vertexShaderCreateInfo,
@@ -551,7 +617,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	fragmentShaderCreateInfo.codeSize = fragmentShaderCode.codeSize;
 	fragmentShaderCreateInfo.pCode = fragmentShaderCode.pCode;
 	VkShaderModule fragmentShaderModule;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateShaderModule(
 			pThis->device,
 			&fragmentShaderCreateInfo,
@@ -710,7 +776,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 
 	VkDescriptorSetLayout descriptorSetLayout;
 	VkDescriptorSetLayout aSetLayouts[1] = { 0 };
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateDescriptorSetLayout(
 			pThis->device,
 			aDescriptorSetCreateInfos,
@@ -728,7 +794,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	pipelineLayoutCreate.pPushConstantRanges = NULL;
 
 	VkPipelineLayout pipelineLayout;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreatePipelineLayout(
 			pThis->device,
 			&pipelineLayoutCreate,
@@ -793,7 +859,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 
 	// TODO: this can be entirely seperate from the pipeline create!
 	VkRenderPass renderPass;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateRenderPass(
 			pThis->device,
 			&renderPassCreate,
@@ -823,7 +889,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	pipelineCreateInfo.basePipelineIndex = 0;
 
 	VkPipeline graphicsPipeline;
-	VK_EXECUTE_REQUIRE_SUCCESS(
+	REQUIRE_VK_SUCCESS(
 		vkCreateGraphicsPipelines(
 			pThis->device,
 			VK_NULL_HANDLE,
@@ -856,6 +922,7 @@ void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
 
 void VulkanRenderer_FreeSurface(VulkanRenderer* pThis) {
 	vkDestroySurfaceKHR(pThis->instance, pThis->surface, NULL);
+	pThis->surface = NULL;
 }
 
 void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis) {
@@ -863,6 +930,7 @@ void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis) {
 	SAFE_FREE(pThis->paSwapChainBuffers);
 	pThis->swapChainImageCount = 0;
 	vkDestroySwapchainKHR(pThis->device, pThis->swapChain, NULL);
+	pThis->swapChain = NULL;
 }
 
 // TODO: may be optimal to also specify the command buffer that will depend on this?
