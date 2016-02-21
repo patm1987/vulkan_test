@@ -41,12 +41,12 @@ struct vulkan_renderer_t {
 // creation
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
 void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis);
-void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis);
+void VulkanRenderer_CreateSurface(VulkanRenderer* pThis);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 
 // destruction - there should be one for every creation above
 void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis);
-void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis);
+void VulkanRenderer_FreeSurface(VulkanRenderer* pThis);
 
 VkFormat SelectDepthFormat(VkPhysicalDevice physicalDevice);
 
@@ -208,7 +208,7 @@ VulkanRenderer* VulkanRenderer_Create(
 
 	VulkanRenderer_CreateCommandPool(pVulkanRenderer);
 	VulkanRenderer_CreateSetupCommandBuffer(pVulkanRenderer);
-	VulkanRenderer_CreateSwapchain(pVulkanRenderer);
+	VulkanRenderer_CreateSurface(pVulkanRenderer);
 	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	return pVulkanRenderer;
@@ -224,7 +224,7 @@ void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 	ShaderManager_Destroy(pThis->pShaderManager);
 	pThis->pShaderManager = NULL;
 
-	VulkanRenderer_FreeSwapchain(pThis);
+	VulkanRenderer_FreeSurface(pThis);
 	VulkanRenderer_FreeSetupCommandBuffer(pThis);
 	vkDestroyCommandPool(pThis->device, pThis->commandPool, NULL);
 	vkDeviceWaitIdle(pThis->device);
@@ -276,7 +276,7 @@ void VulkanRenderer_CreateSetupCommandBuffer(VulkanRenderer* pThis) {
 	VK_EXECUTE_REQUIRE_SUCCESS(vkEndCommandBuffer(pThis->setupCommandBuffer));
 }
 
-void VulkanRenderer_CreateSwapchain(VulkanRenderer* pThis) {
+void VulkanRenderer_CreateSurface(VulkanRenderer* pThis) {
 	// TODO: Win32 code here! abstract me!
 	VkWin32SurfaceCreateInfoKHR createInfo = { 0 };
 	createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -668,7 +668,7 @@ void VulkanRenderer_FreeSetupCommandBuffer(VulkanRenderer* pThis) {
 	}
 }
 
-void VulkanRenderer_FreeSwapchain(VulkanRenderer* pThis) {
+void VulkanRenderer_FreeSurface(VulkanRenderer* pThis) {
 	vkDestroySurfaceKHR(pThis->instance, pThis->surface, NULL);
 }
 
