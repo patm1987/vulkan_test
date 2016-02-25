@@ -38,6 +38,10 @@ struct vulkan_renderer_t {
 	ShaderManager* pShaderManager;
 	VkShaderModule vertexShader;
 	VkShaderModule fragmentShader;
+	VkRenderPass renderPass;
+	VkDescriptorPool descriptorPool;
+	VkDescriptorSetLayout descriptorSetLayout;
+	VkDescriptorSet descriptorSet;
 
 	VkFormat surfaceFormat;
 	VkFormat depthBufferFormat;
@@ -49,7 +53,37 @@ struct vulkan_renderer_t {
 	// TODO: Windows stuff - abstract out!
 	HINSTANCE hInstance;
 	HWND hWnd;
+
+	// debugging
+	PFN_vkCreateDebugReportCallbackEXT createDebugReportCallback;
+	PFN_vkDestroyDebugReportCallbackEXT destroyDebugReportCallback;
+	PFN_vkDebugReportMessageEXT debugReportMessage;
+	VkDebugReportCallbackEXT debugReportCallback;
 };
+
+const char* aszDebugLayerNames[] = {
+	"VK_LAYER_LUNARG_threading",
+	"VK_LAYER_LUNARG_mem_tracker",
+	"VK_LAYER_LUNARG_object_tracker",
+	"VK_LAYER_LUNARG_draw_state",
+	"VK_LAYER_LUNARG_param_checker",
+	"VK_LAYER_LUNARG_swapchain",
+	"VK_LAYER_LUNARG_device_limits",
+	"VK_LAYER_LUNARG_image",
+	"VK_LAYER_GOOGLE_unique_objects",
+};
+size_t debugLayerCount = sizeof(aszDebugLayerNames) / sizeof(const char*);
+
+void VulkanRenderer_SetupDebugging(VulkanRenderer* pThis);
+VkBool32 VulkanRenderer_DebugCallback(
+	VkDebugReportFlagsEXT flags,
+	VkDebugReportObjectTypeEXT objectType,
+	uint64_t object,
+	size_t location,
+	int32_t messageCode,
+	const char* pLayerPrefix,
+	const char* pMessage,
+	void* pUserData);
 
 // creation
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis);
@@ -59,6 +93,9 @@ void VulkanRenderer_CreateSwapchain(
 	VulkanRenderer* pThis,
 	VkCommandBuffer setupCommandBuffer);
 void VulkanRenderer_CreateShaders(VulkanRenderer* pThis);
+void VulkanRenderer_CreateRenderPass(VulkanRenderer* pThis);
+void VulkanRenderer_CreateDescriptorSetLayout(VulkanRenderer* pThis);
+void VulkanRenderer_CreateDescriptorSet(VulkanRenderer* pThis);
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis);
 
 // destruction - there should be one for every creation above
@@ -117,9 +154,11 @@ VulkanRenderer* VulkanRenderer_Create(
 
 	const char* aszInstanceExtensionNames[] = {
 		VK_KHR_SURFACE_EXTENSION_NAME,
+		VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
 
 		// TODO: this is windows code, extract!
-		VK_KHR_WIN32_SURFACE_EXTENSION_NAME
+		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+
 	};
 	uint32_t instanceExtensionCount = sizeof(aszInstanceExtensionNames) / sizeof(const char*);
 
@@ -129,8 +168,8 @@ VulkanRenderer* VulkanRenderer_Create(
 	createInfo.pNext = NULL;
 	createInfo.flags = 0;
 	createInfo.pApplicationInfo = NULL;
-	createInfo.enabledLayerCount = 0;
-	createInfo.ppEnabledLayerNames = NULL;
+	createInfo.enabledLayerCount = debugLayerCount;
+	createInfo.ppEnabledLayerNames = aszDebugLayerNames;
 	createInfo.enabledExtensionCount = instanceExtensionCount;
 	createInfo.ppEnabledExtensionNames = aszInstanceExtensionNames;
 	REQUIRE_VK_SUCCESS(
@@ -241,9 +280,10 @@ VulkanRenderer* VulkanRenderer_Create(
 	deviceQueues[0].pQueuePriorities = queuePriorities;
 
 	const char* aszDeviceExtensionNames[] = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 	};
 	uint32_t deviceExtensionCount = sizeof(aszDeviceExtensionNames) / sizeof(const char*);
+
 
 	VkDeviceCreateInfo deviceCreateInfo = { 0 };
 	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -251,8 +291,8 @@ VulkanRenderer* VulkanRenderer_Create(
 	deviceCreateInfo.flags = 0;
 	deviceCreateInfo.queueCreateInfoCount = 1;
 	deviceCreateInfo.pQueueCreateInfos = deviceQueues;
-	deviceCreateInfo.enabledLayerCount = 0; // don't turn any layers on for now
-	deviceCreateInfo.ppEnabledLayerNames = NULL;
+	deviceCreateInfo.enabledLayerCount = debugLayerCount; // don't turn any layers on for now
+	deviceCreateInfo.ppEnabledLayerNames = aszDebugLayerNames;
 	deviceCreateInfo.enabledExtensionCount = deviceExtensionCount; // no extensions
 	deviceCreateInfo.ppEnabledExtensionNames = aszDeviceExtensionNames;
 	deviceCreateInfo.pEnabledFeatures = NULL; // no special features for now
@@ -263,6 +303,8 @@ VulkanRenderer* VulkanRenderer_Create(
 			NULL,
 			&pVulkanRenderer->device)
 	);
+
+	VulkanRenderer_SetupDebugging(pVulkanRenderer);
 
 	// grab the queue!
 	vkGetDeviceQueue(
@@ -288,10 +330,12 @@ VulkanRenderer* VulkanRenderer_Create(
 
 	VulkanRenderer_CreateSurface(pVulkanRenderer); // TODO: move out of active cmd buffer
 	VulkanRenderer_CreateSwapchain(pVulkanRenderer, setupBuffer);
-
 	VulkanRenderer_CreateShaders(pVulkanRenderer);
+	VulkanRenderer_CreateRenderPass(pVulkanRenderer);
+	VulkanRenderer_CreateDescriptorSetLayout(pVulkanRenderer);
+	VulkanRenderer_CreateDescriptorSet(pVulkanRenderer);
 	// TODO: see what I have to do to make this NOT crash
-	//VulkanRenderer_CreatePipelines(pVulkanRenderer);
+	VulkanRenderer_CreatePipelines(pVulkanRenderer);
 
 	VulkanRenderer_EndCommandBuffer(setupBuffer);
 
@@ -368,6 +412,90 @@ void VulkanRenderer_Destroy(VulkanRenderer* pThis) {
 }
 
 // Private Interface!
+
+void VulkanRenderer_SetupDebugging(VulkanRenderer* pThis) {
+
+	assert(pThis);
+	assert(pThis->instance);
+
+	// TODO: only enable some layers
+	uint32_t layerPropertyCount;
+	REQUIRE_VK_SUCCESS(vkEnumerateInstanceLayerProperties(&layerPropertyCount, NULL));
+	VkLayerProperties* paLayerProperties
+		= SAFE_ALLOCATE_ARRAY(VkLayerProperties, layerPropertyCount);
+	REQUIRE_VK_SUCCESS(
+		vkEnumerateInstanceLayerProperties(
+			&layerPropertyCount, paLayerProperties));
+	OutputDebugStringA("Available Strings!\n");
+	for (uint32_t i = 0; i < layerPropertyCount; i++) {
+		OutputDebugStringA(paLayerProperties[i].layerName);
+		OutputDebugStringA(": ");
+		OutputDebugStringA(paLayerProperties[i].description);
+		OutputDebugStringA("\n");
+	}
+	SAFE_FREE(paLayerProperties);
+
+	pThis->createDebugReportCallback
+		= (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(
+			pThis->instance,
+			"vkCreateDebugReportCallbackEXT");
+	assert(pThis->createDebugReportCallback);
+
+	pThis->destroyDebugReportCallback
+		= (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(
+			pThis->instance,
+			"vkDestroyDebugReportCallbackEXT");
+	assert(pThis->destroyDebugReportCallback);
+
+	//pThis->debugReportMessage
+	//	= (PFN_vkDebugReportMessageEXT)vkGetInstanceProcAddr(
+	//		pThis->instance,
+	//		"vkDebugReportMessageEXT");
+	//assert(pThis->debugReportCallback);
+
+	VkDebugReportCallbackCreateInfoEXT debugCreateInfo = { 0 };
+	debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
+	debugCreateInfo.pNext = NULL;
+	debugCreateInfo.flags
+		= VK_DEBUG_REPORT_ERROR_BIT_EXT
+		| VK_DEBUG_REPORT_WARNING_BIT_EXT;
+	debugCreateInfo.pfnCallback = VulkanRenderer_DebugCallback;
+	debugCreateInfo.pUserData = pThis;
+	pThis->createDebugReportCallback(
+		pThis->instance,
+		&debugCreateInfo,
+		NULL,
+		&pThis->debugReportCallback);
+}
+VkBool32 VulkanRenderer_DebugCallback(
+	VkDebugReportFlagsEXT flags,
+	VkDebugReportObjectTypeEXT objectType,
+	uint64_t object,
+	size_t location,
+	int32_t messageCode,
+	const char* pLayerPrefix,
+	const char* pMessage,
+	void* pUserData) {
+	VulkanRenderer* pThis = (VulkanRenderer*)pUserData;
+	if (flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) {
+		OutputDebugStringA("ERROR: ");
+		OutputDebugStringA(pLayerPrefix);
+		OutputDebugStringA(": ");
+		OutputDebugStringA(pMessage);
+		OutputDebugStringA("\n");
+	}
+	else if (flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
+		OutputDebugStringA("WARNING: ");
+		OutputDebugStringA(pLayerPrefix);
+		OutputDebugStringA(": ");
+		OutputDebugStringA(pMessage);
+		OutputDebugStringA("\n");
+	}
+	else {
+	}
+
+	return VK_FALSE;
+}
 
 void VulkanRenderer_CreateCommandPool(VulkanRenderer* pThis) {
 	VkCommandPoolCreateInfo createInfo = { 0 };
@@ -667,9 +795,162 @@ void VulkanRenderer_CreateShaders(VulkanRenderer* pThis) {
 	// TODO: destroy fragment shader
 }
 
+void VulkanRenderer_CreateRenderPass(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->device);
+
+	VkAttachmentDescription aRenderPassAttachments[2] = { 0 };
+
+	// cbuffer
+	aRenderPassAttachments[0].flags = 0;
+	aRenderPassAttachments[0].format = pThis->surfaceFormat;
+	aRenderPassAttachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+	aRenderPassAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	aRenderPassAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	aRenderPassAttachments[0].stencilLoadOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	aRenderPassAttachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	aRenderPassAttachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	aRenderPassAttachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	// zbuffer
+	aRenderPassAttachments[1].flags = 0;
+	aRenderPassAttachments[1].format = pThis->depthBufferFormat;
+	aRenderPassAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+	aRenderPassAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	aRenderPassAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	aRenderPassAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	aRenderPassAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+	aRenderPassAttachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	aRenderPassAttachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference aColorAttachmentReferences[1] = { 0 };
+	aColorAttachmentReferences[0].attachment = 0;
+	aColorAttachmentReferences[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference aDepthAttachmentReferences[1] = { 0 };
+	aDepthAttachmentReferences[0].attachment = 1;
+	aDepthAttachmentReferences[0].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDescription aSubpasses[1] = { 0 };
+	aSubpasses[0].flags = 0;
+	aSubpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	aSubpasses[0].inputAttachmentCount = 0;
+	aSubpasses[0].pInputAttachments = NULL;
+	aSubpasses[0].colorAttachmentCount = 1;
+	aSubpasses[0].pColorAttachments = aColorAttachmentReferences;
+	aSubpasses[0].pResolveAttachments = NULL;
+	aSubpasses[0].pDepthStencilAttachment = aDepthAttachmentReferences;
+	aSubpasses[0].preserveAttachmentCount = 0;
+	aSubpasses[0].pPreserveAttachments = NULL;
+
+	VkRenderPassCreateInfo renderPassCreate = { 0 };
+	renderPassCreate.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	renderPassCreate.pNext = NULL;
+	renderPassCreate.flags = 0;
+	renderPassCreate.attachmentCount = 2; // cbuffer and zbuffer
+	renderPassCreate.pAttachments = aRenderPassAttachments;
+	renderPassCreate.subpassCount = 1;
+	renderPassCreate.pSubpasses = aSubpasses;
+	renderPassCreate.dependencyCount = 0;
+	renderPassCreate.pDependencies = NULL;
+
+	REQUIRE_VK_SUCCESS(
+		vkCreateRenderPass(
+			pThis->device,
+			&renderPassCreate,
+			NULL,
+			&pThis->renderPass)
+		);
+}
+
+void VulkanRenderer_CreateDescriptorSetLayout(VulkanRenderer* pThis) {
+
+	// Descriptor Sets/Bindings: uniforms can be in sets and bindings:
+	// layout(set=0, binding=0) uniform blah{};
+	VkDescriptorSetLayoutBinding aLayoutBindings0[1] = { 0 };
+	aLayoutBindings0[0].binding = 0;
+	aLayoutBindings0[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	aLayoutBindings0[0].descriptorCount = 1;
+	aLayoutBindings0[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	aLayoutBindings0[0].pImmutableSamplers = NULL;
+
+	VkDescriptorSetLayoutCreateInfo aDescriptorSetCreateInfos[1] = { 0 };
+	aDescriptorSetCreateInfos[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	aDescriptorSetCreateInfos[0].pNext = NULL;
+	aDescriptorSetCreateInfos[0].flags = 0;
+	aDescriptorSetCreateInfos[0].bindingCount = 1;
+	aDescriptorSetCreateInfos[0].pBindings = aLayoutBindings0;
+
+	REQUIRE_VK_SUCCESS(
+		vkCreateDescriptorSetLayout(
+			pThis->device,
+			aDescriptorSetCreateInfos,
+			NULL,
+			&pThis->descriptorSetLayout)
+		);
+}
+
+void VulkanRenderer_CreateDescriptorSet(VulkanRenderer* pThis) {
+	assert(pThis);
+	assert(pThis->device);
+	assert(pThis->descriptorSetLayout);
+
+	VkDescriptorPoolSize aPoolSizes[1] = { 0 };
+	aPoolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	aPoolSizes[0].descriptorCount = 1;
+
+	VkDescriptorPoolCreateInfo poolCreateInfo = { 0 };
+	poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	poolCreateInfo.pNext = NULL;
+	poolCreateInfo.flags = 0;
+	poolCreateInfo.maxSets = 1;
+	poolCreateInfo.poolSizeCount = 1;
+	poolCreateInfo.pPoolSizes = aPoolSizes;
+
+	REQUIRE_VK_SUCCESS(
+		vkCreateDescriptorPool(
+			pThis->device,
+			&poolCreateInfo,
+			NULL,
+			&pThis->descriptorPool)
+	);
+	assert(pThis->descriptorPool);
+
+	//// vkAllocateDescriptorSets
+	//VkDescriptorSetAllocateInfo descriptorAllocateInfo = { 0 };
+	//descriptorAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	//descriptorAllocateInfo.pNext = NULL;
+	//descriptorAllocateInfo.descriptorPool = pThis->descriptorPool;
+	//descriptorAllocateInfo.descriptorSetCount = 1;
+	//descriptorAllocateInfo.pSetLayouts = &pThis->descriptorSetLayout;
+
+	//REQUIRE_VK_SUCCESS(
+	//	vkAllocateDescriptorSets(
+	//		pThis->device,
+	//		NULL,
+	//		&pThis->descriptorSet)
+	//);
+	//assert(pThis->descriptorSet);
+
+	// TODO: use descriptor sets to load uniforms
+
+	// vkUpdateDescriptorSets
+	//VkWriteDescriptorSet descriptorSetWrites = { 0 };
+	//descriptorSetWrites.
+
+	//REQUIRE_VK_SUCCESS(
+	//	vkUpdateDescriptorSets(
+	//		pThis->device,
+	//		1,
+	//		)
+	//);
+}
+
 void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	assert(pThis);
 	assert(pThis->device);
+	assert(pThis->renderPass);
+	assert(pThis->descriptorSetLayout);
 
 	VkPipelineShaderStageCreateInfo aShaderStageCreateInfo[2] = { 0 };
 	aShaderStageCreateInfo[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -752,15 +1033,15 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	rasterizationState.pNext = NULL;
 	rasterizationState.flags = 0;
 	rasterizationState.depthClampEnable = VK_TRUE;
-	rasterizationState.rasterizerDiscardEnable = VK_TRUE;
-	rasterizationState.polygonMode = VK_POLYGON_MODE_POINT;
+	rasterizationState.rasterizerDiscardEnable = VK_FALSE;
+	rasterizationState.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizationState.cullMode = VK_CULL_MODE_NONE; // TODO: actually do front-facing polys
 	rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizationState.depthBiasEnable = VK_FALSE;
 	rasterizationState.depthBiasConstantFactor = 0;
 	rasterizationState.depthBiasClamp = 0;
 	rasterizationState.depthBiasSlopeFactor = 0;
-	rasterizationState.lineWidth = 1;
+	rasterizationState.lineWidth = 0;
 
 	VkPipelineMultisampleStateCreateInfo multisampleState;
 	multisampleState.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -795,6 +1076,13 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 
 	VkPipelineColorBlendAttachmentState aColorBlendAttachments[1] = { 0 };
 	aColorBlendAttachments[0].blendEnable = VK_FALSE;
+	aColorBlendAttachments[0].srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+	aColorBlendAttachments[0].dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+	aColorBlendAttachments[0].colorBlendOp = VK_BLEND_OP_ADD;
+	aColorBlendAttachments[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	aColorBlendAttachments[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	aColorBlendAttachments[0].alphaBlendOp = VK_BLEND_OP_ADD;
+	aColorBlendAttachments[0].colorWriteMask = 0xf;
 
 	VkPipelineColorBlendStateCreateInfo colorBlendState = { 0 };
 	colorBlendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -804,38 +1092,12 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	colorBlendState.attachmentCount = 1;
 	colorBlendState.pAttachments = aColorBlendAttachments;
 
-	// Descriptor Sets/Bindings: uniforms can be in sets and bindings:
-	// layout(set=0, binding=0) uniform blah{};
-	VkDescriptorSetLayoutBinding aLayoutBindings0[1] = { 0 };
-	aLayoutBindings0[0].binding = 0;
-	aLayoutBindings0[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	aLayoutBindings0[0].descriptorCount = 1;
-	aLayoutBindings0[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-	aLayoutBindings0[0].pImmutableSamplers = NULL;
-
-	VkDescriptorSetLayoutCreateInfo aDescriptorSetCreateInfos[1] = { 0 };
-	aDescriptorSetCreateInfos[0].sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	aDescriptorSetCreateInfos[0].pNext = NULL;
-	aDescriptorSetCreateInfos[0].flags = 0;
-	aDescriptorSetCreateInfos[0].bindingCount = 1;
-	aDescriptorSetCreateInfos[0].pBindings = aLayoutBindings0;
-
-	VkDescriptorSetLayout descriptorSetLayout;
-	VkDescriptorSetLayout aSetLayouts[1] = { 0 };
-	REQUIRE_VK_SUCCESS(
-		vkCreateDescriptorSetLayout(
-			pThis->device,
-			aDescriptorSetCreateInfos,
-			NULL,
-			&descriptorSetLayout)
-		);
-
 	VkPipelineLayoutCreateInfo pipelineLayoutCreate = { 0 };
 	pipelineLayoutCreate.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 	pipelineLayoutCreate.pNext = NULL;
 	pipelineLayoutCreate.flags = 0;
 	pipelineLayoutCreate.setLayoutCount = 1;
-	pipelineLayoutCreate.pSetLayouts = &descriptorSetLayout;
+	pipelineLayoutCreate.pSetLayouts = &pThis->descriptorSetLayout;
 	pipelineLayoutCreate.pushConstantRangeCount = 0;
 	pipelineLayoutCreate.pPushConstantRanges = NULL;
 
@@ -846,71 +1108,6 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 			&pipelineLayoutCreate,
 			NULL,
 			&pipelineLayout)
-		);
-
-	VkAttachmentDescription aRenderPassAttachments[2] = { 0 };
-
-	// cbuffer
-	aRenderPassAttachments[0].flags = 0;
-	aRenderPassAttachments[0].format = pThis->surfaceFormat;
-	aRenderPassAttachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-	aRenderPassAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	aRenderPassAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	aRenderPassAttachments[0].stencilLoadOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	aRenderPassAttachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	aRenderPassAttachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	aRenderPassAttachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	// zbuffer
-	aRenderPassAttachments[1].flags = 0;
-	aRenderPassAttachments[1].format = pThis->depthBufferFormat;
-	aRenderPassAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-	aRenderPassAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	aRenderPassAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	aRenderPassAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-	aRenderPassAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-	aRenderPassAttachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-	aRenderPassAttachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-	VkAttachmentReference aColorAttachmentReferences[1] = { 0 };
-	aColorAttachmentReferences[0].attachment = 0;
-	aColorAttachmentReferences[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-	VkAttachmentReference aDepthAttachmentReferences[1] = { 0 };
-	aDepthAttachmentReferences[0].attachment = 1;
-	aDepthAttachmentReferences[0].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-	VkSubpassDescription aSubpasses[1] = { 0 };
-	aSubpasses[0].flags = 0;
-	aSubpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	aSubpasses[0].inputAttachmentCount = 0;
-	aSubpasses[0].pInputAttachments = NULL;
-	aSubpasses[0].colorAttachmentCount = 1;
-	aSubpasses[0].pColorAttachments = aColorAttachmentReferences;
-	aSubpasses[0].pResolveAttachments = NULL;
-	aSubpasses[0].pDepthStencilAttachment = aDepthAttachmentReferences;
-	aSubpasses[0].preserveAttachmentCount = 0;
-	aSubpasses[0].pPreserveAttachments = NULL;
-
-	VkRenderPassCreateInfo renderPassCreate = { 0 };
-	renderPassCreate.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	renderPassCreate.pNext = NULL;
-	renderPassCreate.flags = 0;
-	renderPassCreate.attachmentCount = 2; // cbuffer and zbuffer
-	renderPassCreate.pAttachments = aRenderPassAttachments;
-	renderPassCreate.subpassCount = 1;
-	renderPassCreate.pSubpasses = aSubpasses;
-	renderPassCreate.dependencyCount = 0;
-	renderPassCreate.pDependencies = NULL;
-
-	// TODO: this can be entirely seperate from the pipeline create!
-	VkRenderPass renderPass;
-	REQUIRE_VK_SUCCESS(
-		vkCreateRenderPass(
-			pThis->device,
-			&renderPassCreate,
-			NULL,
-			&renderPass)
 		);
 
 	VkGraphicsPipelineCreateInfo pipelineCreateInfo = { 0 };
@@ -929,7 +1126,7 @@ void VulkanRenderer_CreatePipelines(VulkanRenderer* pThis) {
 	pipelineCreateInfo.pColorBlendState = &colorBlendState;
 	pipelineCreateInfo.pDynamicState = NULL;
 	pipelineCreateInfo.layout = pipelineLayout;
-	pipelineCreateInfo.renderPass = renderPass;
+	pipelineCreateInfo.renderPass = pThis->renderPass;
 	pipelineCreateInfo.subpass = 0;
 	pipelineCreateInfo.basePipelineHandle = 0;
 	pipelineCreateInfo.basePipelineIndex = 0;
